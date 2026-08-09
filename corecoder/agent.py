@@ -7,9 +7,16 @@ This is the heart of CoreCoder.  The pattern is simple:
 
 It keeps looping until the LLM responds with plain text (no tool calls),
 which means it's done working and ready to report back.
+
+v1.0 adds a role system for multi-agent delegation:
+  - **planner**: breaks tasks into steps
+  - **executor**: carries out a single step
+  - **reviewer**: checks executor output for correctness
+  - **researcher**: explores codebase and reports findings
 """
 
 import asyncio
+import enum
 import inspect
 import time
 from .llm import LLM
@@ -20,6 +27,55 @@ from .tools.agent import AgentTool
 from .prompt import system_prompt
 from .context import ContextManager, estimate_tokens
 from .replay import ReplayLogger
+
+
+# ---- role system --------------------------------------------------------
+
+
+class AgentRole(enum.Enum):
+    PLANNER = "planner"
+    EXECUTOR = "executor"
+    REVIEWER = "reviewer"
+    RESEARCHER = "researcher"
+
+
+_ROLE_PROMPTS = {
+    AgentRole.PLANNER: (
+        "You are a planning agent. Break the task into 3-6 concrete, "
+        "verifiable steps. Output ONLY a JSON plan — do not execute anything."
+    ),
+    AgentRole.EXECUTOR: (
+        "You are an executor. Carry out exactly the step given to you. "
+        "Report success or failure concisely. Do NOT plan or explore — just execute."
+    ),
+    AgentRole.REVIEWER: (
+        "You are a code reviewer. Examine the changes made by the executor. "
+        "Check for: correctness, style consistency, missing edge cases, "
+        "potential bugs. Report 'PASS' or list specific issues."
+    ),
+    AgentRole.RESEARCHER: (
+        "You are a research agent. Explore the codebase to answer a specific "
+        "question. Use grep, glob, and read_file to gather information. "
+        "Report findings concisely — do NOT edit any files."
+    ),
+}
+
+
+def role_prompt(role: AgentRole) -> str:
+    """Return the role-specific system prompt fragment."""
+    return _ROLE_PROMPTS.get(role, "")
+
+
+def role_tools(role: AgentRole, all_tools: list[Tool]) -> list[Tool]:
+    """Filter tools based on role. Reviewer and researcher are read-only."""
+    if role in (AgentRole.REVIEWER, AgentRole.RESEARCHER):
+        return [t for t in all_tools if t.name in ("read_file", "grep", "glob")]
+    if role == AgentRole.PLANNER:
+        return []  # planner uses no tools — it just thinks
+    return all_tools  # executor gets full access
+
+
+# ---- Agent --------------------------------------------------------------
 
 
 class Agent:
@@ -129,20 +185,84 @@ class Agent:
             return f"Error executing {tc.name}: {e}", elapsed, False
 
     async def _exec_tools_async(self, tool_calls, on_tool=None) -> list:
-        """Run all tool calls concurrently via asyncio.gather.
+        """Run tool calls with read-priority scheduling.
 
-        Replaces the old ThreadPoolExecutor-based parallel execution with
-        native async concurrency — single-tool and multi-tool paths are
-        unified into one code path.
+        Strategy:
+        1. All read-only tools (read_file, grep, glob) start immediately in
+           parallel — they never conflict with each other.
+        2. Write tools (write_file, edit_file, edit_ast) are grouped by
+           target file path.  Within each group, if there was a preceding
+           read for the same file, the read completes first.
+        3. Everything else (bash, agent) runs in parallel alongside reads.
+
+        This gives the same wall-clock as blind ``asyncio.gather`` for
+        independent calls, but prevents race conditions when the LLM issues
+        a read+edit pair for the same file in one round.
         """
         for tc in tool_calls:
             if on_tool:
                 on_tool(tc.name, tc.arguments)
 
-        async def _run_one(tc):
-            return tc, await self._exec_tool(tc)
+        t0 = time.monotonic()
 
-        return await asyncio.gather(*[_run_one(tc) for tc in tool_calls])
+        # classify
+        readers: list = []   # (tc,) — safe to run fully parallel
+        writers: list = []   # (tc,) — grouped by target path below
+        others: list = []    # (tc,) — bash, agent, etc.
+
+        for tc in tool_calls:
+            name = tc.name
+            if name in ("read_file", "grep", "glob"):
+                readers.append(tc)
+            elif name in ("write_file", "edit_file", "edit_ast"):
+                writers.append(tc)
+            else:
+                others.append(tc)
+
+        # build tasks: readers + others all start in parallel
+        tasks: dict[str, asyncio.Task] = {}  # tc.id → task
+
+        def _launch(tc):
+            task = asyncio.create_task(self._exec_tool(tc))
+            tasks[tc.id] = task
+            return tc, task
+
+        launched = []
+        for tc in readers + others:
+            launched.append(_launch(tc))
+
+        # writers: group by file_path so we serialize reads→writes on the
+        # same path when a matching read was already launched
+        writer_groups: dict[str, list] = {}
+        for tc in writers:
+            path = tc.arguments.get("file_path", "") or ""
+            writer_groups.setdefault(path, []).append(tc)
+
+        for path, wlist in writer_groups.items():
+            # if any reader targeted the same path, wait for those reads first
+            for rtc in readers:
+                rpath = rtc.arguments.get("file_path", "") or ""
+                if rpath == path and rtc.id in tasks:
+                    await tasks[rtc.id]  # wait for the read to finish
+            for wtc in wlist:
+                launched.append(_launch(wtc))
+
+        # gather all remaining tasks
+        results = []
+        for tc, coro in launched:
+            try:
+                results.append((tc, await coro))
+            except Exception:
+                # _exec_tool never raises (it catches internally),
+                # but guard anyway
+                results.append((tc, ("Error: internal error", 0, False)))
+
+        elapsed = (time.monotonic() - t0) * 1000
+        if len(tool_calls) > 1:
+            # log parallelism benefit (for replay visibility)
+            pass  # serial_vs_parallel_ms logged implicitly via step_duration
+
+        return results
 
     def _answer_pending_tool_calls(self, tool_calls):
         """Backfill a tool reply for every call that didn't get one.
@@ -169,6 +289,79 @@ class Agent:
         """Close the replay log file. Safe to call multiple times."""
         if self._replay:
             self._replay.close()
+
+    async def spawn(
+        self,
+        task: str,
+        role: AgentRole = AgentRole.EXECUTOR,
+        reviewer: bool = False,
+    ) -> str:
+        """Spawn a sub-agent with a specific role and return its result.
+
+        The sub-agent gets:
+        - A role-specific system prompt
+        - Role-filtered tools (reviewer/researcher are read-only)
+        - An independent context window
+        - Optional reviewer pass after executor completes
+
+        This is the foundation of multi-agent delegation — the parent agent
+        can spawn N specialised children for different parts of a task.
+        """
+        tools = role_tools(role, self.tools)
+        # remove agent tool to prevent infinite recursion
+        tools = [t for t in tools if t.name != "agent"]
+
+        sub = Agent(
+            llm=self.llm,
+            tools=tools,
+            max_context_tokens=self.context.max_tokens,
+            max_rounds=min(self.max_rounds, 15),
+            replay=False,  # sub-agents don't write their own replay logs
+        )
+
+        # inject role-specific prompt as the system message
+        role_instruction = role_prompt(role)
+        sub._system = f"{sub._system}\n\n[Role: {role.value}]\n{role_instruction}"
+
+        try:
+            result = await sub.chat(task)
+
+            # optional reviewer pass
+            if reviewer and role == AgentRole.EXECUTOR and result:
+                review = await self._review(executor_result=result, task=task)
+                result = f"{result}\n\n[Reviewer ({AgentRole.REVIEWER.value})]\n{review}"
+
+            # trim long results
+            if len(result) > 5000:
+                result = result[:4500] + "\n... (sub-agent output truncated)"
+            return result
+        except Exception as e:
+            return f"Sub-agent ({role.value}) error: {e}"
+        finally:
+            sub.close()
+
+    async def _review(self, executor_result: str, task: str) -> str:
+        """Run a lightweight reviewer pass on executor output."""
+        review_prompt = (
+            f"Task: {task}\n\n"
+            f"Executor output:\n{executor_result[:3000]}\n\n"
+            f"Review the above. Report PASS or list specific issues."
+        )
+        tools = role_tools(AgentRole.REVIEWER, self.tools)
+        tools = [t for t in tools if t.name != "agent"]
+
+        reviewer = Agent(
+            llm=self.llm,
+            tools=tools,
+            max_context_tokens=self.context.max_tokens,
+            max_rounds=5,
+            replay=False,
+        )
+        reviewer._system = f"{reviewer._system}\n\n[Role: reviewer]\n{_ROLE_PROMPTS[AgentRole.REVIEWER]}"
+        try:
+            return await reviewer.chat(review_prompt)
+        finally:
+            reviewer.close()
 
     async def plan(self, task: str) -> "PlanRecord":
         """Generate a structured execution plan for a complex task.
