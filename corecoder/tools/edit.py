@@ -11,6 +11,7 @@ import difflib
 from pathlib import Path
 
 from .base import Tool
+from ..sandbox import is_write_blocked
 
 # track files changed this session for /diff
 _changed_files: set[str] = set()
@@ -47,6 +48,8 @@ class EditFileTool(Tool):
 
     def _execute_sync(self, file_path: str, old_string: str, new_string: str) -> str:
         try:
+            if is_write_blocked(file_path):
+                return f"Error: writing to {file_path} is blocked by sandbox policy"
             p = Path(file_path).expanduser().resolve()
             if not p.exists():
                 return f"Error: {file_path} not found"

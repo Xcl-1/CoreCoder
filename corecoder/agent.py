@@ -170,6 +170,53 @@ class Agent:
         if self._replay:
             self._replay.close()
 
+    async def plan(self, task: str) -> "PlanRecord":
+        """Generate a structured execution plan for a complex task.
+
+        Returns a PlanRecord with a goal and ordered steps.  The user
+        reviews and confirms the plan before the agent executes it.
+        """
+        from .models import PlanRecord
+
+        prompt = f"""You are a software engineering planner. Given the task below, produce a structured execution plan as JSON.
+
+Return ONLY a JSON object with this exact structure:
+{{"goal": "<one-line summary>", "steps": [{{"id": 1, "action": "<what to do>", "tool": "<suggested tool name or empty>", "expected": "<what success looks like>"}}]}}
+
+Rules:
+- Break complex tasks into 3-8 concrete steps.
+- Each step should be a single, verifiable action.
+- Suggest the most appropriate CoreCoder tool for each step (bash, read_file, write_file, edit_file, edit_ast, grep, glob, or empty string).
+- Order steps logically — read before edit, test after change.
+
+Task: {task}
+
+Plan (JSON only):"""
+
+        resp = await asyncio.to_thread(
+            self.llm.chat,
+            messages=[{"role": "user", "content": prompt}],
+            tools=None,
+            on_token=None,
+        )
+
+        # extract JSON from the response (may be wrapped in ```json blocks)
+        text = resp.content.strip()
+        if "```" in text:
+            # extract content between first ```json and last ```
+            text = text.split("```json", 1)[-1].split("```", 1)[0].strip()
+        elif text.startswith("{"):
+            pass  # raw JSON
+        else:
+            # try to find the first { ... } block
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            if start >= 0 and end > start:
+                text = text[start:end]
+
+        plan = PlanRecord.model_validate_json(text)
+        return plan
+
     def _log_step(self, step: int, msg_count: int, est_tokens: int,
                   resp, results, step_start: float):
         """Write one StepRecord to the replay log, if enabled."""

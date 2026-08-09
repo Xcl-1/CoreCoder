@@ -69,3 +69,20 @@ class StepRecord(BaseModel):
     llm_response: LLMResponse = Field(default_factory=LLMResponse)
     tool_executions: list[ToolExecRecord] = Field(default_factory=list)
     step_duration_ms: float = 0.0
+
+
+class PlanStep(BaseModel):
+    """A single step in an execution plan."""
+
+    id: int
+    action: str  # human-readable description
+    tool: str = ""  # suggested tool, or empty for manual reasoning
+    expected: str = ""  # what success looks like
+    status: str = "pending"  # pending | in_progress | done | failed
+
+
+class PlanRecord(BaseModel):
+    """A structured execution plan produced by the LLM."""
+
+    goal: str
+    steps: list[PlanStep] = Field(default_factory=list)

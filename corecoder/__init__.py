@@ -5,10 +5,11 @@ __version__ = "0.4.0"
 from corecoder.agent import Agent
 from corecoder.llm import LLM
 from corecoder.config import Config
-from corecoder.models import ToolCall, LLMResponse, StepRecord, ToolExecRecord
+from corecoder.models import ToolCall, LLMResponse, StepRecord, ToolExecRecord, PlanStep, PlanRecord
 from corecoder.tools import ALL_TOOLS
 
 __all__ = [
     "Agent", "LLM", "Config", "ALL_TOOLS", "__version__",
     "ToolCall", "LLMResponse", "StepRecord", "ToolExecRecord",
+    "PlanStep", "PlanRecord",
 ]

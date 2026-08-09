@@ -12,6 +12,7 @@ import contextvars
 import os
 import re
 from .base import Tool
+from ..sandbox import wrap_command
 
 # contextvars is the async-compatible replacement for threading.local().
 # Each asyncio task carries its own context, so two concurrent bash calls
@@ -60,13 +61,17 @@ class BashTool(Tool):
     }
 
     async def execute(self, command: str, timeout: int = 120) -> str:
-        # safety check
+        # safety check (runs before sandbox wrapping so blocked patterns
+        # are caught regardless of Docker)
         warning = _check_dangerous(command)
         if warning:
             return f"⚠ Blocked: {warning}\nCommand: {command}\nIf intentional, modify the command to be more specific."
 
         # use this task's own tracked working directory
         cwd = _cwd_context.get() or os.getcwd()
+
+        # sandbox wrapping (no-op if CORECODER_SANDBOX is not set)
+        command = wrap_command(command, cwd=cwd)
 
         try:
             proc = await asyncio.create_subprocess_shell(

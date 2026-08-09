@@ -218,6 +218,13 @@ def _repl(agent: Agent, config: Config):
             else:
                 console.print("[dim]Replay logging is disabled.[/dim]")
             continue
+        if user_input.startswith("/plan"):
+            task = user_input[6:].strip() if user_input.startswith("/plan ") else ""
+            if not task:
+                console.print("[yellow]Usage: /plan <task description>[/yellow]")
+                continue
+            asyncio.run(_do_plan(agent, task))
+            continue
         if user_input == "/sessions":
             sessions = list_sessions()
             if not sessions:
@@ -257,6 +264,86 @@ def _repl(agent: Agent, config: Config):
     agent.close()
 
 
+async def _do_plan(agent: Agent, task: str):
+    """Generate a plan, show it to the user, and execute on confirmation."""
+    from rich.table import Table
+
+    console.print(f"\n[bold]Planning for:[/bold] {task}")
+    console.print("[dim]Generating plan...[/dim]\n")
+
+    try:
+        plan = await agent.plan(task)
+    except Exception as e:
+        console.print(f"[red]Failed to generate plan: {e}[/red]")
+        return
+
+    # display the plan
+    table = Table(title=f"Plan: {plan.goal}", border_style="blue")
+    table.add_column("#", style="dim", width=4)
+    table.add_column("Action", style="white")
+    table.add_column("Tool", style="cyan", width=12)
+    table.add_column("Expected", style="dim", width=30)
+
+    for step in plan.steps:
+        table.add_row(str(step.id), step.action, step.tool or "-", step.expected)
+
+    console.print(table)
+
+    # ask for confirmation (plain input() — pt_prompt conflicts with asyncio.run)
+    try:
+        choice = input("\nExecute this plan? [y]es / [n]o / [m]odify: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n[yellow]Plan cancelled.[/yellow]")
+        return
+
+    if choice in ("n", "no", ""):
+        console.print("[yellow]Plan cancelled.[/yellow]")
+        return
+
+    if choice in ("m", "modify"):
+        modify = input("Describe changes (or just press Enter to cancel): ").strip()
+        if not modify:
+            console.print("[yellow]Plan cancelled.[/yellow]")
+            return
+        # re-plan with the modification request
+        console.print("[dim]Re-planning with feedback...[/dim]")
+        await _do_plan(agent, f"{task}\n\nUser feedback on previous plan: {modify}")
+        return
+
+    # execute the plan step by step
+    console.print(f"\n[green]Executing {len(plan.steps)} steps...[/green]\n")
+    for step in plan.steps:
+        console.print(f"[bold blue]Step {step.id}/{len(plan.steps)}:[/bold blue] {step.action}")
+
+        def on_token(tok):
+            print(tok, end="", flush=True)
+
+        def on_tool(name, kwargs):
+            console.print(f"\n[dim]> {name}({_brief(kwargs)})[/dim]")
+
+        try:
+            asyncio.run(
+                agent.chat(
+                    f"Execute this single step from the plan: {step.action}\n"
+                    f"Suggested tool: {step.tool or 'any'}\n"
+                    f"Expected result: {step.expected}",
+                    on_token=on_token,
+                    on_tool=on_tool,
+                )
+            )
+            print()
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Step interrupted.[/yellow]")
+            if input("Continue with remaining steps? [y/n]: ").strip().lower() not in ("y", "yes"):
+                break
+        except Exception as e:
+            console.print(f"\n[red]Step failed: {e}[/red]")
+            if input("Continue? [y/n]: ").strip().lower() not in ("y", "yes"):
+                break
+
+    console.print("\n[green]Plan complete.[/green]")
+
+
 def _show_help():
     console.print(Panel(
         "[bold]Commands:[/bold]\n"
@@ -268,6 +355,7 @@ def _show_help():
         "  /compact       Compress conversation context\n"
         "  /diff          Show files modified this session\n"
         "  /replay        Show replay log path\n"
+        "  /plan <task>   Generate and execute a structured plan\n"
         "  /save          Save session to disk\n"
         "  /sessions      List saved sessions\n"
         "  quit           Exit CoreCoder\n"

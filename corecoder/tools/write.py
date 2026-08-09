@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 from .base import Tool
 from .edit import _changed_files
+from ..sandbox import is_write_blocked
 
 
 class WriteFileTool(Tool):
@@ -32,6 +33,8 @@ class WriteFileTool(Tool):
 
     def _execute_sync(self, file_path: str, content: str) -> str:
         try:
+            if is_write_blocked(file_path):
+                return f"Error: writing to {file_path} is blocked by sandbox policy"
             p = Path(file_path).expanduser().resolve()
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(content, encoding="utf-8")
