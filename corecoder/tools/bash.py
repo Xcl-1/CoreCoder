@@ -7,16 +7,18 @@ Claude Code's BashTool is 1,143 lines. This is the distilled version:
 - Working directory tracking (cd awareness)
 """
 
+import asyncio
+import contextvars
 import os
 import re
-import subprocess
-import threading
 from .base import Tool
 
-# Track cwd across commands (Claude Code does this too). Thread-local, so that
-# when the agent executes tools in parallel two bash calls never race on one
-# shared global: each worker thread carries its own cwd. See article 05.
-_local = threading.local()
+# contextvars is the async-compatible replacement for threading.local().
+# Each asyncio task carries its own context, so two concurrent bash calls
+# never race on the shared cwd — the same guarantee as before.
+_cwd_context: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "bash_cwd", default=None
+)
 
 # patterns that could wreck the filesystem or leak secrets
 _DANGEROUS_PATTERNS = [
@@ -57,33 +59,40 @@ class BashTool(Tool):
         "required": ["command"],
     }
 
-    def execute(self, command: str, timeout: int = 120) -> str:
+    async def execute(self, command: str, timeout: int = 120) -> str:
         # safety check
         warning = _check_dangerous(command)
         if warning:
             return f"⚠ Blocked: {warning}\nCommand: {command}\nIf intentional, modify the command to be more specific."
 
-        # use this thread's own tracked working directory
-        cwd = getattr(_local, "cwd", None) or os.getcwd()
+        # use this task's own tracked working directory
+        cwd = _cwd_context.get() or os.getcwd()
 
         try:
-            proc = subprocess.run(
+            proc = await asyncio.create_subprocess_shell(
                 command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
             )
+            try:
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                    proc.communicate(), timeout=timeout
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                return f"Error: timed out after {timeout}s"
+
+            stdout = stdout_bytes.decode("utf-8", errors="replace")
+            stderr = stderr_bytes.decode("utf-8", errors="replace")
 
             # track cd commands so next command runs in the right place
             if proc.returncode == 0:
                 _update_cwd(command, cwd)
-            out = proc.stdout
-            if proc.stderr:
-                out += f"\n[stderr]\n{proc.stderr}"
+            out = stdout
+            if stderr:
+                out += f"\n[stderr]\n{stderr}"
             if proc.returncode != 0:
                 out += f"\n[exit code: {proc.returncode}]"
             # keep head + tail to preserve the most useful info
@@ -94,8 +103,6 @@ class BashTool(Tool):
                     + out[-3000:]
                 )
             return out.strip() or "(no output)"
-        except subprocess.TimeoutExpired:
-            return f"Error: timed out after {timeout}s"
         except Exception as e:
             return f"Error running command: {e}"
 
@@ -124,4 +131,4 @@ def _update_cwd(command: str, current_cwd: str):
                     running = new_dir
                     changed = True
     if changed:
-        _local.cwd = running
+        _cwd_context.set(running)

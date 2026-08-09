@@ -4,7 +4,7 @@ import os
 import platform
 
 
-def system_prompt(tools) -> str:
+def system_prompt(tools, model: str = "") -> str:
     cwd = os.getcwd()
     tool_list = "\n".join(f"- **{t.name}**: {t.description}" for t in tools)
     uname = platform.uname()
@@ -14,6 +14,7 @@ You are CoreCoder, an AI coding assistant running in the user's terminal.
 You help with software engineering: writing code, fixing bugs, refactoring, explaining code, running commands, and more.
 
 # Environment
+- Model: {model}
 - Working directory: {cwd}
 - OS: {uname.system} {uname.release} ({uname.machine})
 - Python: {platform.python_version()}

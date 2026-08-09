@@ -11,7 +11,7 @@ class Tool(ABC):
     parameters: dict  # JSON Schema for the function args
 
     @abstractmethod
-    def execute(self, **kwargs) -> str:
+    async def execute(self, **kwargs) -> str:
         """Run the tool and return a text result."""
         ...
 

@@ -33,7 +33,7 @@ class AgentTool(Tool):
     # set by Agent.__init__ after construction
     _parent_agent = None
 
-    def execute(self, task: str) -> str:
+    async def execute(self, task: str) -> str:
         if self._parent_agent is None:
             return "Error: agent tool not initialized (no parent agent)"
 
@@ -49,7 +49,7 @@ class AgentTool(Tool):
         )
 
         try:
-            result = sub.chat(task)
+            result = await sub.chat(task)
             # trim long results to avoid blowing up parent's context
             if len(result) > 5000:
                 result = result[:4500] + "\n... (sub-agent output truncated)"

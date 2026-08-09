@@ -1,5 +1,6 @@
 """Interactive REPL - the user-facing terminal interface."""
 
+import asyncio
 import sys
 import os
 import argparse
@@ -104,7 +105,7 @@ def _run_once(agent: Agent, prompt: str):
         console.print(f"\n[dim]> {name}({_brief(kwargs)})[/dim]")
 
     try:
-        agent.chat(prompt, on_token=on_token, on_tool=on_tool)
+        asyncio.run(agent.chat(prompt, on_token=on_token, on_tool=on_tool))
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted.[/yellow]")
         sys.exit(130)
@@ -116,10 +117,14 @@ def _run_once(agent: Agent, prompt: str):
 
 def _repl(agent: Agent, config: Config):
     """Interactive read-eval-print loop."""
+    replay_info = ""
+    if agent._replay:
+        replay_info = f"\nReplay: [dim]{agent._replay.path}[/dim]"
     console.print(Panel(
         f"[bold]CoreCoder[/bold] v{__version__}\n"
         f"Model: [cyan]{config.model}[/cyan]"
         + (f"  Base: [dim]{config.base_url}[/dim]" if config.base_url else "")
+        + replay_info
         + "\nType [bold]/help[/bold] for commands, [bold]Ctrl+C[/bold] to cancel, [bold]quit[/bold] to exit.",
         border_style="blue",
     ))
@@ -206,6 +211,13 @@ def _repl(agent: Agent, config: Config):
                 for f in sorted(_changed_files):
                     console.print(f"  [cyan]{f}[/cyan]")
             continue
+        if user_input == "/replay":
+            if agent._replay:
+                console.print(f"Replay log: [cyan]{agent._replay.path}[/cyan]")
+                console.print(f"Steps recorded: [bold]{agent._step_number}[/bold]")
+            else:
+                console.print("[dim]Replay logging is disabled.[/dim]")
+            continue
         if user_input == "/sessions":
             sessions = list_sessions()
             if not sessions:
@@ -231,7 +243,7 @@ def _repl(agent: Agent, config: Config):
             console.print(f"\n[dim]> {name}({_brief(kwargs)})[/dim]")
 
         try:
-            response = agent.chat(user_input, on_token=on_token, on_tool=on_tool)
+            response = asyncio.run(agent.chat(user_input, on_token=on_token, on_tool=on_tool))
             if streamed:
                 print()  # newline after streamed tokens
             else:
@@ -241,6 +253,8 @@ def _repl(agent: Agent, config: Config):
             console.print("\n[yellow]Interrupted.[/yellow]")
         except Exception as e:
             console.print(f"\n[red]Error: {e}[/red]")
+
+    agent.close()
 
 
 def _show_help():
@@ -253,6 +267,7 @@ def _show_help():
         "  /tokens        Show token usage\n"
         "  /compact       Compress conversation context\n"
         "  /diff          Show files modified this session\n"
+        "  /replay        Show replay log path\n"
         "  /save          Save session to disk\n"
         "  /sessions      List saved sessions\n"
         "  quit           Exit CoreCoder\n"

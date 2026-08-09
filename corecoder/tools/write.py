@@ -1,5 +1,6 @@
 """File creation / overwrite."""
 
+import asyncio
 from pathlib import Path
 from .base import Tool
 from .edit import _changed_files
@@ -26,7 +27,10 @@ class WriteFileTool(Tool):
         "required": ["file_path", "content"],
     }
 
-    def execute(self, file_path: str, content: str) -> str:
+    async def execute(self, file_path: str, content: str) -> str:
+        return await asyncio.to_thread(self._execute_sync, file_path, content)
+
+    def _execute_sync(self, file_path: str, content: str) -> str:
         try:
             p = Path(file_path).expanduser().resolve()
             p.parent.mkdir(parents=True, exist_ok=True)

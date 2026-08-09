@@ -6,6 +6,7 @@ substring must appear exactly once in the file, which eliminates ambiguity
 and makes edits safe and reviewable.
 """
 
+import asyncio
 import difflib
 from pathlib import Path
 
@@ -41,7 +42,10 @@ class EditFileTool(Tool):
         "required": ["file_path", "old_string", "new_string"],
     }
 
-    def execute(self, file_path: str, old_string: str, new_string: str) -> str:
+    async def execute(self, file_path: str, old_string: str, new_string: str) -> str:
+        return await asyncio.to_thread(self._execute_sync, file_path, old_string, new_string)
+
+    def _execute_sync(self, file_path: str, old_string: str, new_string: str) -> str:
         try:
             p = Path(file_path).expanduser().resolve()
             if not p.exists():

@@ -1,5 +1,6 @@
 """Content search with regex support."""
 
+import asyncio
 import re
 from pathlib import Path
 from .base import Tool
@@ -33,7 +34,10 @@ class GrepTool(Tool):
         "required": ["pattern"],
     }
 
-    def execute(self, pattern: str, path: str = ".", include: str | None = None) -> str:
+    async def execute(self, pattern: str, path: str = ".", include: str | None = None) -> str:
+        return await asyncio.to_thread(self._execute_sync, pattern, path, include)
+
+    def _execute_sync(self, pattern: str, path: str = ".", include: str | None = None) -> str:
         try:
             regex = re.compile(pattern)
         except re.error as e:

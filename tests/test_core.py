@@ -1,5 +1,7 @@
 """Tests for core modules: config, context, session, imports."""
 
+import pytest
+
 from corecoder import Agent, LLM, Config, ALL_TOOLS, __version__
 from corecoder import session as session_module
 from corecoder.context import ContextManager, estimate_tokens
@@ -152,33 +154,36 @@ def test_cost_estimation_unknown_model():
 
 # --- Changed files tracking ---
 
-def test_edit_tracks_changed_files(tmp_path):
+@pytest.mark.asyncio
+async def test_edit_tracks_changed_files(tmp_path):
     from corecoder.tools.edit import _changed_files
     _changed_files.clear()
     edit = get_tool("edit_file")
     path = tmp_path / "sample.py"
     path.write_text("aaa\nbbb\n")
-    edit.execute(file_path=str(path), old_string="aaa", new_string="zzz")
+    await edit.execute(file_path=str(path), old_string="aaa", new_string="zzz")
     assert any(str(path) in p for p in _changed_files)
     _changed_files.clear()
 
 
-def test_write_tracks_changed_files(tmp_path):
+@pytest.mark.asyncio
+async def test_write_tracks_changed_files(tmp_path):
     from corecoder.tools.edit import _changed_files
     _changed_files.clear()
     write = get_tool("write_file")
     path = tmp_path / "tracked.txt"
-    write.execute(file_path=str(path), content="tracked\n")
+    await write.execute(file_path=str(path), content="tracked\n")
     assert any(path.name in p for p in _changed_files)
     _changed_files.clear()
 
 
 # --- Agent tool execution ---
 
-def test_agent_tool_scope_is_per_instance():
+@pytest.mark.asyncio
+async def test_agent_tool_scope_is_per_instance():
     """An Agent restricted to a subset of tools must not resolve tools outside it."""
     only_read = [get_tool("read_file")]
-    agent = Agent(llm=LLM.__new__(LLM), tools=only_read)
+    agent = Agent(llm=LLM.__new__(LLM), tools=only_read, replay=False)
     assert set(agent._tool_by_name) == {"read_file"}
 
     class _TC:
@@ -186,10 +191,12 @@ def test_agent_tool_scope_is_per_instance():
         id = "x"
         arguments = {"command": "echo hi"}
 
-    assert "unknown tool 'bash'" in agent._exec_tool(_TC())
+    result, _elapsed, _success = await agent._exec_tool(_TC())
+    assert "unknown tool 'bash'" in result
 
 
-def test_exec_tool_distinguishes_bad_args_from_internal_error():
+@pytest.mark.asyncio
+async def test_exec_tool_distinguishes_bad_args_from_internal_error():
     """A TypeError raised inside a tool must not be reported as bad arguments."""
     from corecoder.tools.base import Tool
 
@@ -198,10 +205,10 @@ def test_exec_tool_distinguishes_bad_args_from_internal_error():
         description = "raises TypeError internally"
         parameters = {"type": "object", "properties": {}, "required": []}
 
-        def execute(self):
+        async def execute(self):
             raise TypeError("internal explosion")
 
-    agent = Agent(llm=LLM.__new__(LLM), tools=[_Boom()])
+    agent = Agent(llm=LLM.__new__(LLM), tools=[_Boom()], replay=False)
 
     class _BadArgs:
         name, id, arguments = "boom", "1", {"unexpected": 1}
@@ -209,14 +216,17 @@ def test_exec_tool_distinguishes_bad_args_from_internal_error():
     class _Good:
         name, id, arguments = "boom", "2", {}
 
-    assert "bad arguments" in agent._exec_tool(_BadArgs())
-    assert "Error executing boom" in agent._exec_tool(_Good())
-    assert "bad arguments" not in agent._exec_tool(_Good())
+    result_bad, _, _ = await agent._exec_tool(_BadArgs())
+    assert "bad arguments" in result_bad
+
+    result_good, _, _ = await agent._exec_tool(_Good())
+    assert "Error executing boom" in result_good
+    assert "bad arguments" not in result_good
 
 
 def test_interrupt_backfills_missing_tool_replies():
     """A half-finished tool round must be repaired so history stays valid."""
-    agent = Agent(llm=LLM.__new__(LLM), tools=[])
+    agent = Agent(llm=LLM.__new__(LLM), tools=[], replay=False)
     agent.messages = [
         {"role": "assistant", "content": None, "tool_calls": [{"id": "a"}, {"id": "b"}]},
         {"role": "tool", "tool_call_id": "a", "content": "done"},

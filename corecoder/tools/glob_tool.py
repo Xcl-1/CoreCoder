@@ -1,5 +1,6 @@
 """File pattern matching."""
 
+import asyncio
 from pathlib import Path
 from .base import Tool
 
@@ -25,7 +26,10 @@ class GlobTool(Tool):
         "required": ["pattern"],
     }
 
-    def execute(self, pattern: str, path: str = ".") -> str:
+    async def execute(self, pattern: str, path: str = ".") -> str:
+        return await asyncio.to_thread(self._execute_sync, pattern, path)
+
+    def _execute_sync(self, pattern: str, path: str = ".") -> str:
         try:
             base = Path(path).expanduser().resolve()
             if not base.is_dir():
