@@ -11,8 +11,9 @@ import asyncio
 import contextvars
 import os
 import re
-from .base import Tool
+
 from ..sandbox import wrap_command
+from .base import Tool
 
 # contextvars is the async-compatible replacement for threading.local().
 # Each asyncio task carries its own context, so two concurrent bash calls

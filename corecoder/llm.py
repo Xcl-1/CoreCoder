@@ -10,11 +10,14 @@ single unified interface. Set CORECODER_PROVIDER=litellm.
 """
 
 import json
+import logging
 import time
 
-from openai import OpenAI, APIError, BadRequestError, RateLimitError, APITimeoutError, APIConnectionError
+from openai import APIConnectionError, APIError, APITimeoutError, BadRequestError, OpenAI, RateLimitError
 
-from .models import ToolCall, LLMResponse
+from .models import LLMResponse, ToolCall
+
+logger = logging.getLogger(__name__)
 
 
 # pricing per million tokens: (input, output)
@@ -163,17 +166,24 @@ class LLM:
         for attempt in range(max_retries):
             try:
                 return self.client.chat.completions.create(**params)
-            except (RateLimitError, APITimeoutError, APIConnectionError):
+            except (RateLimitError, APITimeoutError, APIConnectionError) as e:
                 if attempt == max_retries - 1:
+                    logger.error("LLM call failed after %d retries: %s", max_retries, e)
                     raise
                 wait = 2 ** attempt
+                logger.debug("LLM transient error (attempt %d/%d): %s — retrying in %ds",
+                            attempt + 1, max_retries, type(e).__name__, wait)
                 time.sleep(wait)
             except APIError as e:
                 # retry 5xx server errors but not 4xx; base APIError has no status_code so read it defensively
                 status_code = getattr(e, "status_code", None)
                 if status_code and status_code >= 500 and attempt < max_retries - 1:
+                    logger.debug("LLM server error %d (attempt %d/%d) — retrying",
+                                status_code, attempt + 1, max_retries)
                     time.sleep(2 ** attempt)
                 else:
+                    if status_code and status_code < 500:
+                        logger.error("LLM client error %d: %s", status_code, e)
                     raise
 
 
@@ -299,6 +309,9 @@ class LiteLLM(LLM):
                 )
                 is_server = any(kw in err for kw in ["500", "502", "503", "504"])
                 if (is_transient or is_server) and attempt < max_retries - 1:
+                    logger.debug("LiteLLM error (attempt %d/%d): %s — retrying in %ds",
+                                attempt + 1, max_retries, err[:100], 2 ** attempt)
                     time.sleep(2 ** attempt)
                 else:
+                    logger.error("LiteLLM call failed after %d attempts: %s", attempt + 1, err[:200])
                     raise

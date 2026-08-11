@@ -28,14 +28,21 @@ def test_config_from_env(monkeypatch):
 
 
 def test_config_defaults(monkeypatch):
-    # clear relevant env vars without leaking the change into other tests
+    # Prevent _load_dotenv from reading .env so we test true defaults.
+    # Otherwise a local .env re-sets env vars cleared by monkeypatch.
+    monkeypatch.setattr("corecoder.config._load_dotenv", lambda: None)
     monkeypatch.delenv("CORECODER_MODEL", raising=False)
     monkeypatch.delenv("CORECODER_MAX_TOKENS", raising=False)
+    monkeypatch.delenv("CORECODER_PROVIDER", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("CORECODER_TEMPERATURE", raising=False)
 
     c = Config.from_env()
     assert c.model == "gpt-5.5"
     assert c.max_tokens == 4096
     assert c.temperature == 0.0
+    assert c.provider == "openai"
 
 
 # --- Context ---

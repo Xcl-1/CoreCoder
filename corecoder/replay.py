@@ -8,7 +8,6 @@ The log lives at ``~/.corecoder/replays/<session_id>.jsonl``, matching
 the convention of ``~/.corecoder/sessions/`` for session persistence.
 """
 
-import json
 import time
 from pathlib import Path
 
@@ -29,7 +28,7 @@ class ReplayLogger:
     # -- context manager -------------------------------------------------
 
     def open(self):
-        self._file = open(str(self._path), "a", encoding="utf-8")
+        self._file = open(str(self._path), "a", encoding="utf-8")  # noqa: SIM115 — file stays open for appends
 
     def close(self):
         if self._file:

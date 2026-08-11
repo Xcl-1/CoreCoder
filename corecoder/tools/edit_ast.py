@@ -13,10 +13,9 @@ a clear error suggesting ``edit_file`` instead.
 """
 
 import ast
-import asyncio
-import difflib
 from pathlib import Path
 
+from ._utils import unified_diff
 from .base import Tool
 from .edit import _changed_files
 
@@ -61,9 +60,6 @@ class EditASTTool(Tool):
         "required": ["file_path", "operation", "target", "new_text"],
     }
 
-    async def execute(self, file_path: str, operation: str, target: str, new_text: str) -> str:
-        return await asyncio.to_thread(self._execute_sync, file_path, operation, target, new_text)
-
     def _execute_sync(self, file_path: str, operation: str, target: str, new_text: str) -> str:
         try:
             p = Path(file_path).expanduser().resolve()
@@ -107,7 +103,7 @@ class EditASTTool(Tool):
             p.write_text(new_content, encoding="utf-8")
             _changed_files.add(str(p))
 
-            diff = _unified_diff(original, new_content, str(p))
+            diff = unified_diff(original, new_content, str(p))
             return f"Edited {file_path} via AST ({operation})\n{diff}"
         except Exception as e:
             return f"Error: {e}"
@@ -259,17 +255,3 @@ def _get_indent(line: str) -> str:
     """Extract the leading whitespace from a line."""
     return line[: len(line) - len(line.lstrip())]
 
-
-def _unified_diff(old: str, new: str, filename: str, context: int = 3) -> str:
-    """Generate a compact unified diff."""
-    old_lines = old.splitlines(keepends=True)
-    new_lines = new.splitlines(keepends=True)
-    diff = difflib.unified_diff(
-        old_lines, new_lines,
-        fromfile=f"a/{filename}", tofile=f"b/{filename}",
-        n=context,
-    )
-    result = "".join(diff)
-    if len(result) > 3000:
-        result = result[:2500] + "\n... (diff truncated)\n"
-    return result

@@ -46,12 +46,56 @@ class Config:
             or os.getenv("DEEPSEEK_API_KEY")
             or ""
         )
+        max_tokens_raw = os.getenv("CORECODER_MAX_TOKENS", "4096")
+        temperature_raw = os.getenv("CORECODER_TEMPERATURE", "0")
+        max_context_raw = os.getenv("CORECODER_MAX_CONTEXT", "128000")
+        provider = os.getenv("CORECODER_PROVIDER", "openai")
+
+        # --- validation --------------------------------------------------
+        try:
+            max_tokens = int(max_tokens_raw)
+        except ValueError:
+            raise ValueError(
+                f"CORECODER_MAX_TOKENS must be an integer, got: {max_tokens_raw!r}"
+            )
+        if max_tokens < 1:
+            raise ValueError(
+                f"CORECODER_MAX_TOKENS must be positive, got: {max_tokens}"
+            )
+
+        try:
+            temperature = float(temperature_raw)
+        except ValueError:
+            raise ValueError(
+                f"CORECODER_TEMPERATURE must be a number, got: {temperature_raw!r}"
+            )
+        if not (0.0 <= temperature <= 2.0):
+            raise ValueError(
+                f"CORECODER_TEMPERATURE must be 0.0–2.0, got: {temperature}"
+            )
+
+        try:
+            max_context_tokens = int(max_context_raw)
+        except ValueError:
+            raise ValueError(
+                f"CORECODER_MAX_CONTEXT must be an integer, got: {max_context_raw!r}"
+            )
+        if max_context_tokens < 1024:
+            raise ValueError(
+                f"CORECODER_MAX_CONTEXT must be at least 1024, got: {max_context_tokens}"
+            )
+
+        if provider not in ("openai", "litellm"):
+            raise ValueError(
+                f"CORECODER_PROVIDER must be 'openai' or 'litellm', got: {provider!r}"
+            )
+
         return cls(
             model=os.getenv("CORECODER_MODEL", "gpt-5.5"),
             api_key=api_key,
             base_url=os.getenv("OPENAI_BASE_URL") or os.getenv("CORECODER_BASE_URL"),
-            max_tokens=int(os.getenv("CORECODER_MAX_TOKENS", "4096")),
-            temperature=float(os.getenv("CORECODER_TEMPERATURE", "0")),
-            max_context_tokens=int(os.getenv("CORECODER_MAX_CONTEXT", "128000")),
-            provider=os.getenv("CORECODER_PROVIDER", "openai"),
+            max_tokens=max_tokens,
+            temperature=temperature,
+            max_context_tokens=max_context_tokens,
+            provider=provider,
         )

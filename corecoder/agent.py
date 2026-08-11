@@ -15,18 +15,26 @@ v1.0 adds a role system for multi-agent delegation:
   - **researcher**: explores codebase and reports findings
 """
 
+from __future__ import annotations
+
 import asyncio
 import enum
 import inspect
+import logging
 import time
-from .llm import LLM
-from .models import ToolExecRecord, StepRecord
-from .tools import ALL_TOOLS
-from .tools.base import Tool
-from .tools.agent import AgentTool
-from .prompt import system_prompt
+from collections.abc import Callable
+from typing import Any
+
 from .context import ContextManager, estimate_tokens
+from .llm import LLM
+from .models import PlanRecord, StepRecord, ToolExecRecord
+from .prompt import system_prompt
 from .replay import ReplayLogger
+from .tools import ALL_TOOLS
+from .tools.agent import AgentTool
+from .tools.base import Tool
+
+logger = logging.getLogger(__name__)
 
 
 # ---- role system --------------------------------------------------------
@@ -112,7 +120,9 @@ class Agent:
     def _tool_schemas(self) -> list[dict]:
         return [t.schema() for t in self.tools]
 
-    async def chat(self, user_input: str, on_token=None, on_tool=None) -> str:
+    async def chat(self, user_input: str,
+                   on_token: Callable[[str], None] | None = None,
+                   on_tool: Callable[[str, dict[str, Any]], None] | None = None) -> str:
         """Process one user message. May involve multiple LLM/tool rounds."""
         self.messages.append({"role": "user", "content": user_input})
         await asyncio.to_thread(self.context.maybe_compress, self.messages, self.llm)
@@ -163,28 +173,35 @@ class Agent:
 
         return "(reached maximum tool-call rounds)"
 
-    async def _exec_tool(self, tc) -> tuple[str, float, bool]:
+    async def _exec_tool(self, tc: Any) -> tuple[str, float, bool]:
         """Execute a single tool call. Returns (result, elapsed_ms, success)."""
         tool = self._tool_by_name.get(tc.name)
         if tool is None:
+            logger.warning("Unknown tool requested: %s", tc.name)
             return f"Error: unknown tool '{tc.name}'", 0, False
         # validate arguments first so a TypeError raised *inside* the tool isn't
         # mislabelled as a bad-arguments error from the caller
         try:
             inspect.signature(tool.execute).bind(**tc.arguments)
         except TypeError as e:
+            logger.debug("Bad arguments for %s: %s", tc.name, e)
             return f"Error: bad arguments for {tc.name}: {e}", 0, False
         t0 = time.monotonic()
         try:
             result = await tool.execute(**tc.arguments)
             elapsed = (time.monotonic() - t0) * 1000
             success = not result.startswith("Error")
+            if not success:
+                logger.debug("Tool %s failed: %s", tc.name, result[:200])
             return result, elapsed, success
         except Exception as e:
             elapsed = (time.monotonic() - t0) * 1000
+            logger.exception("Tool %s raised exception", tc.name)
             return f"Error executing {tc.name}: {e}", elapsed, False
 
-    async def _exec_tools_async(self, tool_calls, on_tool=None) -> list:
+    async def _exec_tools_async(self, tool_calls: list[Any],
+                                 on_tool: Callable[[str, dict[str, Any]], None] | None = None
+                                 ) -> list[tuple[Any, tuple[str, float, bool]]]:
         """Run tool calls with read-priority scheduling.
 
         Strategy:
@@ -202,8 +219,6 @@ class Agent:
         for tc in tool_calls:
             if on_tool:
                 on_tool(tc.name, tc.arguments)
-
-        t0 = time.monotonic()
 
         # classify
         readers: list = []   # (tc,) — safe to run fully parallel
@@ -252,19 +267,14 @@ class Agent:
         for tc, coro in launched:
             try:
                 results.append((tc, await coro))
-            except Exception:
+            except Exception:  # noqa: BLE001 — guard against unexpected internal errors
                 # _exec_tool never raises (it catches internally),
                 # but guard anyway
                 results.append((tc, ("Error: internal error", 0, False)))
 
-        elapsed = (time.monotonic() - t0) * 1000
-        if len(tool_calls) > 1:
-            # log parallelism benefit (for replay visibility)
-            pass  # serial_vs_parallel_ms logged implicitly via step_duration
-
         return results
 
-    def _answer_pending_tool_calls(self, tool_calls):
+    def _answer_pending_tool_calls(self, tool_calls: list[Any]) -> None:
         """Backfill a tool reply for every call that didn't get one.
 
         OpenAI-compatible APIs reject a request where an assistant message has
@@ -335,7 +345,8 @@ class Agent:
             if len(result) > 5000:
                 result = result[:4500] + "\n... (sub-agent output truncated)"
             return result
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError) as e:
+            logger.error("Sub-agent (%s) error: %s", role.value, e)
             return f"Sub-agent ({role.value}) error: {e}"
         finally:
             sub.close()
@@ -363,13 +374,12 @@ class Agent:
         finally:
             reviewer.close()
 
-    async def plan(self, task: str) -> "PlanRecord":
+    async def plan(self, task: str) -> PlanRecord:
         """Generate a structured execution plan for a complex task.
 
         Returns a PlanRecord with a goal and ordered steps.  The user
         reviews and confirms the plan before the agent executes it.
         """
-        from .models import PlanRecord
 
         prompt = f"""You are a software engineering planner. Given the task below, produce a structured execution plan as JSON.
 
@@ -411,7 +421,8 @@ Plan (JSON only):"""
         return plan
 
     def _log_step(self, step: int, msg_count: int, est_tokens: int,
-                  resp, results, step_start: float):
+                  resp: Any, results: list[tuple[Any, tuple[str, float, bool]]],
+                  step_start: float) -> None:
         """Write one StepRecord to the replay log, if enabled."""
         if not self._replay:
             return

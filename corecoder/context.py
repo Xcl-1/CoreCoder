@@ -19,11 +19,14 @@ chars/3.5 heuristic that's more accurate than the old //3 estimator.
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .llm import LLM
+
+logger = logging.getLogger(__name__)
 
 # ---- optional tiktoken support ------------------------------------------
 
@@ -40,7 +43,7 @@ def _get_tiktoken():
     try:
         import tiktoken
         _TIKTOKEN_ENC = tiktoken.get_encoding("cl100k_base")
-    except Exception:
+    except Exception:  # noqa: BLE001 — tiktoken may fail in many ways; graceful fallback
         _TIKTOKEN_ENC = False
         return None
     return _TIKTOKEN_ENC
@@ -95,22 +98,21 @@ class ContextManager:
         compressed = False
 
         # Layer 1: tool-type-aware snip
-        if current > self._snip_at:
-            if self._snip_tool_outputs(messages):
-                compressed = True
-                current = estimate_tokens(messages)
+        if current > self._snip_at and self._snip_tool_outputs(messages):
+            compressed = True
+            current = estimate_tokens(messages)
 
         # Layer 2: incremental summarisation
-        if current > self._summarize_at and len(messages) > 10:
-            if self._incremental_summarize(messages, llm, keep_recent=_MIN_KEEP_RECENT):
-                compressed = True
-                current = estimate_tokens(messages)
+        if (current > self._summarize_at and len(messages) > 10
+                and self._incremental_summarize(messages, llm, keep_recent=_MIN_KEEP_RECENT)):
+            compressed = True
+            current = estimate_tokens(messages)
 
         # Layer 2.5: structured retention — demote old tool details
-        if current > self._summarize_at and len(messages) > 10:
-            if self._layered_compress(messages, keep_recent=_MIN_KEEP_RECENT):
-                compressed = True
-                current = estimate_tokens(messages)
+        if (current > self._summarize_at and len(messages) > 10
+                and self._layered_compress(messages, keep_recent=_MIN_KEEP_RECENT)):
+            compressed = True
+            current = estimate_tokens(messages)
 
         # Layer 3: hard collapse — last resort
         if current > self._collapse_at and len(messages) > 4:
@@ -237,7 +239,7 @@ class ContextManager:
                 )
                 return resp.content.strip()
             except Exception:
-                pass
+                logger.debug("LLM summarisation failed, falling back to regex extraction", exc_info=True)
 
         # fallback: just prepend the old summary to extracted key info
         extracted = self._extract_key_info(new_messages)
@@ -333,7 +335,7 @@ class ContextManager:
                 )
                 return resp.content
             except Exception:
-                pass
+                logger.debug("Hard collapse summarisation failed, falling back to regex extraction", exc_info=True)
 
         return self._extract_key_info(messages)
 

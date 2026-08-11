@@ -1,7 +1,7 @@
 """File reading with line numbers."""
 
-import asyncio
 from pathlib import Path
+
 from .base import Tool
 
 
@@ -29,9 +29,6 @@ class ReadFileTool(Tool):
         },
         "required": ["file_path"],
     }
-
-    async def execute(self, file_path: str, offset: int = 1, limit: int = 2000) -> str:
-        return await asyncio.to_thread(self._execute_sync, file_path, offset, limit)
 
     def _execute_sync(self, file_path: str, offset: int = 1, limit: int = 2000) -> str:
         try:

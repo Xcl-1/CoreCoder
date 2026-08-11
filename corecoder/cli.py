@@ -1,24 +1,26 @@
 """Interactive REPL - the user-facing terminal interface."""
 
-import asyncio
-import sys
-import os
 import argparse
+import asyncio
+import logging
+import os
+import sys
 
-from rich.console import Console
-from rich.markdown import Markdown
-from rich.panel import Panel
 from prompt_toolkit import prompt as pt_prompt
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
+from rich.console import Console
+from rich.markdown import Markdown
+from rich.panel import Panel
 
-from .agent import Agent
-from .llm import LLM, LiteLLM
-from .config import Config
-from .session import save_session, load_session, list_sessions
 from . import __version__
+from .agent import Agent
+from .config import Config
+from .llm import LLM, LiteLLM
+from .session import list_sessions, load_session, save_session
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 
 def _parse_args():
@@ -36,6 +38,16 @@ def _parse_args():
 
 
 def main():
+    # configure root logger: WARNING to console, DEBUG to file if requested
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    # bump agent/llm loggers to INFO when CORECODER_DEBUG is set
+    if os.getenv("CORECODER_DEBUG"):
+        logging.getLogger("corecoder").setLevel(logging.DEBUG)
+
     args = _parse_args()
     config = Config.from_env()
 
@@ -109,8 +121,8 @@ def _run_once(agent: Agent, prompt: str):
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted.[/yellow]")
         sys.exit(130)
-    except Exception as e:
-        console.print(f"\n[red]Error: {e}[/red]")
+    except Exception:
+        logger.exception("One-shot execution failed")
         sys.exit(1)
     print()
 
@@ -239,11 +251,11 @@ def _repl(agent: Agent, config: Config):
             console.print(f"[yellow]Unknown command: {user_input.split()[0]} (try /help)[/yellow]")
             continue
 
-        # call the agent
+        # call the agent — new list each iteration, closure captures correctly
         streamed: list[str] = []
 
-        def on_token(tok):
-            streamed.append(tok)
+        def on_token(tok, _output: list[str] = streamed):
+            _output.append(tok)
             print(tok, end="", flush=True)
 
         def on_tool(name, kwargs):
@@ -258,8 +270,9 @@ def _repl(agent: Agent, config: Config):
                 console.print(Markdown(response))
         except KeyboardInterrupt:
             console.print("\n[yellow]Interrupted.[/yellow]")
-        except Exception as e:
-            console.print(f"\n[red]Error: {e}[/red]")
+        except Exception:
+            logger.exception("Error in agent chat loop")
+            console.print("\n[red]An unexpected error occurred. Set CORECODER_DEBUG=1 for details.[/red]")
 
     agent.close()
 
@@ -273,8 +286,9 @@ async def _do_plan(agent: Agent, task: str):
 
     try:
         plan = await agent.plan(task)
-    except Exception as e:
-        console.print(f"[red]Failed to generate plan: {e}[/red]")
+    except Exception:
+        logger.exception("Plan generation failed")
+        console.print("[red]Failed to generate plan.[/red]")
         return
 
     # display the plan
@@ -336,8 +350,9 @@ async def _do_plan(agent: Agent, task: str):
             console.print("\n[yellow]Step interrupted.[/yellow]")
             if input("Continue with remaining steps? [y/n]: ").strip().lower() not in ("y", "yes"):
                 break
-        except Exception as e:
-            console.print(f"\n[red]Step failed: {e}[/red]")
+        except Exception:
+            logger.exception("Plan step failed")
+            console.print("\n[red]Step failed.[/red]")
             if input("Continue? [y/n]: ").strip().lower() not in ("y", "yes"):
                 break
 
