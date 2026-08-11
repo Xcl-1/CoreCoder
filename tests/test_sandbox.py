@@ -2,10 +2,7 @@
 
 import os
 
-import pytest
-
-from corecoder.sandbox import is_write_blocked, sandbox_enabled, docker_available, wrap_command
-
+from corecoder.sandbox import docker_available, is_write_blocked, sandbox_enabled, wrap_command
 
 # --- path whitelist ------------------------------------------------------
 

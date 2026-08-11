@@ -1,0 +1,9 @@
+[
+  {
+    "tool_name": "bash",
+    "pattern": "^python\\s+\\S+\\.py(\\s+.*)?$",
+    "action": "allow",
+    "reason": "run python scripts in this project",
+    "priority": 0
+  }
+]

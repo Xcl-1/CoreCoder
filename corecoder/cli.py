@@ -17,6 +17,7 @@ from . import __version__
 from .agent import Agent
 from .config import Config
 from .llm import LLM, LiteLLM
+from .security import AuditLogger, Guard, PermissionRule
 from .session import list_sessions, load_session, save_session
 
 console = Console()
@@ -83,7 +84,11 @@ def main():
         temperature=config.temperature,
         max_tokens=config.max_tokens,
     )
-    agent = Agent(llm=llm, max_context_tokens=config.max_context_tokens)
+
+    # security layer — interactive confirmation callback
+    guard = Guard(confirm_callback=_cli_confirm)
+    _cli_confirm._guard = guard  # enable "always allow" via callback attribute
+    agent = Agent(llm=llm, max_context_tokens=config.max_context_tokens, guard=guard)
 
     # resume saved session
     if args.resume:
@@ -245,6 +250,18 @@ def _repl(agent: Agent, config: Config):
                 for s in sessions:
                     console.print(f"  [cyan]{s['id']}[/cyan] ({s['model']}, {s['saved_at']}) {s['preview']}")
             continue
+        if user_input == "/permissions":
+            _show_permissions(agent)
+            continue
+        if user_input.startswith("/permit "):
+            _permit_rule(agent, user_input[8:].strip())
+            continue
+        if user_input.startswith("/deny "):
+            _deny_rule(agent, user_input[6:].strip())
+            continue
+        if user_input == "/audit":
+            _show_audit(agent)
+            continue
 
         # an unknown /command shouldn't be sent to the model as a prompt
         if user_input.startswith("/"):
@@ -373,6 +390,10 @@ def _show_help():
         "  /plan <task>   Generate and execute a structured plan\n"
         "  /save          Save session to disk\n"
         "  /sessions      List saved sessions\n"
+        "  /permissions   List security rules\n"
+        "  /permit <t> <p> Add an allow rule\n"
+        "  /deny <t> <p> Add a deny rule\n"
+        "  /audit         Show today's audit log\n"
         "  quit           Exit CoreCoder\n"
         "\n"
         "[bold]Input:[/bold]\n"
@@ -381,6 +402,173 @@ def _show_help():
         title="CoreCoder Help",
         border_style="dim",
     ))
+
+
+# ---- security helpers --------------------------------------------------
+
+def _cli_confirm(tool_name: str, arguments: dict, reason: str) -> bool | None:
+    """Interactive confirmation callback for the Guard.
+
+    Returns True (allow), False (deny once), or None (cancel).
+    """
+    from rich.table import Table
+
+    summary = _summarise_args(tool_name, arguments)
+    table = Table(title="⚠ Security Confirmation Required", border_style="yellow")
+    table.add_column("Field", style="dim")
+    table.add_column("Value")
+    table.add_row("Tool", tool_name)
+    table.add_row("Arguments", summary)
+    table.add_row("Reason", reason)
+    console.print(table)
+
+    try:
+        choice = input("\nAllow? [y]es / [n]o / [a]lways yes for this session: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return None
+
+    if choice in ("y", "yes"):
+        return True
+    if choice in ("a", "always"):
+        # add a temporary user rule to skip future confirms
+        if hasattr(_cli_confirm, "_guard"):
+            pm = _cli_confirm._guard.permissions
+            pm.add_user_rule(PermissionRule(
+                tool_name=tool_name,
+                pattern=".*",
+                action="allow",
+                reason=f"user allowed during session: {reason}",
+                priority=100,
+                source="user",
+            ))
+            console.print("[green]Added allow rule — won't ask again this session.[/green]")
+        return True
+    return False
+
+
+def _show_permissions(agent: Agent) -> None:
+    """List all security rules in priority order."""
+    if agent.guard is None:
+        console.print("[dim]Security guard is not active.[/dim]")
+        return
+
+    from rich.table import Table
+    rules = agent.guard.permissions.list_rules()
+    if not rules:
+        console.print("[dim]No rules defined.[/dim]")
+        return
+
+    table = Table(title="Security Rules", border_style="blue")
+    table.add_column("#", style="dim", width=4)
+    table.add_column("Tool", style="cyan")
+    table.add_column("Pattern", style="white", width=30)
+    table.add_column("Action", width=8)
+    table.add_column("Source", width=10)
+    table.add_column("Reason", style="dim", width=30)
+
+    for i, r in enumerate(rules[:30]):  # cap at 30 for display
+        action_style = {"allow": "[green]allow[/green]", "deny": "[red]deny[/red]", "ask": "[yellow]ask[/yellow]"}
+        table.add_row(
+            str(i + 1), r.tool_name, r.pattern[:28],
+            action_style.get(r.action, r.action), r.source, r.reason[:28],
+        )
+    console.print(table)
+    console.print(f"[dim]Total: {len(rules)} rules (showing first 30)[/dim]")
+
+
+def _permit_rule(agent: Agent, args: str) -> None:
+    """Add a user-level allow rule: /permit <tool> <pattern>"""
+    if agent.guard is None:
+        console.print("[dim]Security guard is not active.[/dim]")
+        return
+    parts = args.split(None, 1)
+    if len(parts) < 2:
+        console.print("[yellow]Usage: /permit <tool> <pattern>[/yellow]")
+        console.print("Example: /permit bash git push")
+        return
+    tool, pattern = parts
+    rule = PermissionRule(
+        tool_name=tool, pattern=pattern, action="allow",
+        reason=f"user-granted: {pattern}", priority=100, source="user",
+    )
+    agent.guard.permissions.add_user_rule(rule)
+    console.print(f"[green]Added allow rule: {tool} ~ {pattern}[/green]")
+
+
+def _deny_rule(agent: Agent, args: str) -> None:
+    """Add a user-level deny rule: /deny <tool> <pattern>"""
+    if agent.guard is None:
+        console.print("[dim]Security guard is not active.[/dim]")
+        return
+    parts = args.split(None, 1)
+    if len(parts) < 2:
+        console.print("[yellow]Usage: /deny <tool> <pattern>[/yellow]")
+        console.print("Example: /deny bash rm -rf")
+        return
+    tool, pattern = parts
+    rule = PermissionRule(
+        tool_name=tool, pattern=pattern, action="deny",
+        reason=f"user-denied: {pattern}", priority=100, source="user",
+    )
+    agent.guard.permissions.add_user_rule(rule)
+    console.print(f"[red]Added deny rule: {tool} ~ {pattern}[/red]")
+
+
+def _show_audit(agent: Agent) -> None:
+    """Show a summary of today's audit log."""
+    if agent.guard is None:
+        console.print("[dim]Security guard is not active.[/dim]")
+        return
+    import json
+    import time as _time
+    today = _time.strftime("%Y-%m-%d")
+    log_path = agent.guard.audit._dir / f"audit_{today}.jsonl"
+    if not log_path.exists():
+        console.print("[dim]No audit entries for today.[/dim]")
+        return
+
+    entries = []
+    try:
+        for line in log_path.read_text(encoding="utf-8").strip().split("\n"):
+            if line:
+                entries.append(json.loads(line))
+    except (OSError, json.JSONDecodeError):
+        console.print("[red]Could not read audit log.[/red]")
+        return
+
+    if not entries:
+        console.print("[dim]No audit entries for today.[/dim]")
+        return
+
+    allowed = sum(1 for e in entries if e.get("decision") == "allow")
+    denied = sum(1 for e in entries if e.get("decision") != "allow")
+    console.print(f"[bold]Audit ({today}):[/bold] [green]{allowed} allowed[/green], [red]{denied} denied[/red], {len(entries)} total")
+
+    # show last 10 entries
+    from rich.table import Table
+    table = Table(title="Recent Entries", border_style="dim")
+    table.add_column("Time", style="dim", width=10)
+    table.add_column("Tool", style="cyan")
+    table.add_column("Decision", width=10)
+    table.add_column("Reason", style="dim", width=40)
+    for e in entries[-10:]:
+        ts = e.get("timestamp", "")[-8:] or ""  # time portion only
+        dec = e.get("decision", "?")
+        dec_style = f"[green]{dec}[/green]" if dec == "allow" else f"[red]{dec}[/red]"
+        table.add_row(ts, e.get("tool_name", ""), dec_style, e.get("reason", "")[:38])
+    console.print(table)
+
+
+def _summarise_args(tool_name: str, arguments: dict, max_len: int = 200) -> str:
+    """Build a short human-readable summary of a tool call for display."""
+    if tool_name == "bash":
+        cmd = arguments.get("command", "")
+        return cmd[:max_len]
+    file_path = arguments.get("file_path", "")
+    if file_path:
+        return file_path[:max_len]
+    text = " ".join(str(v)[:80] for v in arguments.values())
+    return text[:max_len]
 
 
 def _brief(kwargs: dict, maxlen: int = 80) -> str:

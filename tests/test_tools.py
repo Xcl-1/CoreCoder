@@ -71,11 +71,11 @@ async def test_bash_blocks_rm_force_recursive_variants():
 
 def test_bash_allows_non_destructive_rm():
     """A plain or non-forced local rm should not be blocked."""
-    from corecoder.tools.bash import _check_dangerous
+    from corecoder.security.defaults import check_dangerous
 
-    assert _check_dangerous("rm -f notes.log") is None
-    assert _check_dangerous("rm -r ./build_output") is None
-    assert _check_dangerous("rm temp.txt") is None
+    assert check_dangerous("rm -f notes.log") is None
+    assert check_dangerous("rm -r ./build_output") is None
+    assert check_dangerous("rm temp.txt") is None
 
 
 @pytest.mark.asyncio
@@ -187,8 +187,8 @@ async def test_read_write_unicode_roundtrip(tmp_path):
     path = tmp_path / "zh.txt"
     await write.execute(file_path=str(path), content="第一行\n第二行\n")
     raw = path.read_bytes()
-    assert "第一行".encode("utf-8") in raw  # genuinely UTF-8 on disk, not cp936
-    assert "第二行".encode("utf-8") in raw
+    assert "第一行".encode() in raw  # genuinely UTF-8 on disk, not cp936
+    assert "第二行".encode() in raw
     assert path.read_text(encoding="utf-8").splitlines() == ["第一行", "第二行"]
     r = await read.execute(file_path=str(path))
     assert "第一行" in r and "第二行" in r

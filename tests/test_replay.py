@@ -2,10 +2,7 @@
 
 import json
 
-import pytest
-
-from corecoder.models import ToolCall, LLMResponse, ToolExecRecord, StepRecord
-
+from corecoder.models import LLMResponse, StepRecord, ToolCall, ToolExecRecord
 
 # --- StepRecord serialisation ---
 

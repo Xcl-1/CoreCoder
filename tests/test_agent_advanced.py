@@ -1,13 +1,11 @@
 """Tests for advanced agent features: role system, spawn, parallel scheduling."""
 
-import asyncio
 
 import pytest
 
 from corecoder.agent import Agent, AgentRole, role_prompt, role_tools
 from corecoder.llm import LLM
-from corecoder.tools import get_tool, ALL_TOOLS
-
+from corecoder.tools import ALL_TOOLS
 
 # --- Role system ---------------------------------------------------------
 

@@ -1,13 +1,11 @@
 """Tests for enhanced context compression: incremental summarisation,
 tiktoken fallback, L2.5 layered compression, and dynamic thresholds."""
 
-import pytest
 
 from corecoder.context import (
     ContextManager,
     estimate_tokens,
 )
-
 
 # --- Token estimation ----------------------------------------------------
 
@@ -147,7 +145,7 @@ def test_incremental_summarize_fallback_extracts_key_info():
     ctx = ContextManager(max_tokens=3000)
     msgs = []
     for i in range(10):
-        msgs.append({"role": "user", "content": f"edit src/main.py " + "x" * 200})
+        msgs.append({"role": "user", "content": "edit src/main.py " + "x" * 200})
         msgs.append({"role": "tool", "tool_call_id": f"t{i}", "content": "Error: file not found"})
     result = ctx._incremental_summarize(msgs, llm=None, keep_recent=4)
     assert result is True

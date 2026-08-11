@@ -23,7 +23,7 @@ import inspect
 import logging
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .context import ContextManager, estimate_tokens
 from .llm import LLM
@@ -33,6 +33,9 @@ from .replay import ReplayLogger
 from .tools import ALL_TOOLS
 from .tools.agent import AgentTool
 from .tools.base import Tool
+
+if TYPE_CHECKING:
+    from .security import Guard
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +97,7 @@ class Agent:
         max_context_tokens: int = 128_000,
         max_rounds: int = 50,
         replay: bool = True,
+        guard: Guard | None = None,
     ):
         self.llm = llm
         self.tools = tools if tools is not None else ALL_TOOLS
@@ -103,6 +107,7 @@ class Agent:
         self.max_rounds = max_rounds
         self._system = system_prompt(self.tools)
         self._step_number = 0
+        self.guard = guard
 
         # replay log — on by default in production, off in tests
         self._replay = ReplayLogger() if replay else None
@@ -186,9 +191,19 @@ class Agent:
         except TypeError as e:
             logger.debug("Bad arguments for %s: %s", tc.name, e)
             return f"Error: bad arguments for {tc.name}: {e}", 0, False
+
+        # ---- security review ----
+        if self.guard is not None:
+            decision = self.guard.review(tc.name, tc.arguments)
+            if not decision.allowed:
+                return f"[Security] Blocked: {decision.reason}", 0, False
+
         t0 = time.monotonic()
         try:
             result = await tool.execute(**tc.arguments)
+            # ---- output sanitisation ----
+            if self.guard is not None:
+                result = self.guard.sanitize(result)
             elapsed = (time.monotonic() - t0) * 1000
             success = not result.startswith("Error")
             if not success:
@@ -327,6 +342,7 @@ class Agent:
             max_context_tokens=self.context.max_tokens,
             max_rounds=min(self.max_rounds, 15),
             replay=False,  # sub-agents don't write their own replay logs
+            guard=self.guard,  # inherit parent's security policy
         )
 
         # inject role-specific prompt as the system message

@@ -3,16 +3,16 @@
 Claude Code's BashTool is 1,143 lines. This is the distilled version:
 - Output capture with truncation (head+tail preserved)
 - Timeout support
-- Dangerous command detection
+- Dangerous command detection (delegated to security.defaults)
 - Working directory tracking (cd awareness)
 """
 
 import asyncio
 import contextvars
 import os
-import re
 
 from ..sandbox import wrap_command
+from ..security.defaults import check_dangerous
 from .base import Tool
 
 # contextvars is the async-compatible replacement for threading.local().
@@ -21,23 +21,6 @@ from .base import Tool
 _cwd_context: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "bash_cwd", default=None
 )
-
-# patterns that could wreck the filesystem or leak secrets
-_DANGEROUS_PATTERNS = [
-    # recursive delete aimed at root/home (force flag optional)
-    (r"\brm\s+(-\w*)?-r\w*\s+(/|~|\$HOME)", "recursive delete on home/root"),
-    # recursive (-r/-R) and force (-f) flags together, in any order or spacing
-    (r"\brm\b(?=(?:.*\s)?-\w*[rR])(?=(?:.*\s)?-\w*f)", "force recursive delete"),
-    # the same, written with long-form flags
-    (r"\brm\b.*--recursive\b.*--force\b|\brm\b.*--force\b.*--recursive\b", "force recursive delete"),
-    (r"\bmkfs\b", "format filesystem"),
-    (r"\bdd\s+.*of=/dev/", "raw disk write"),
-    (r">\s*/dev/sd[a-z]", "overwrite block device"),
-    (r"\bchmod\s+(-R\s+)?777\s+/", "chmod 777 on root"),
-    (r":\(\)\s*\{.*:\|:.*\}", "fork bomb"),
-    (r"\bcurl\b.*\|\s*(sudo\s+)?(ba)?sh\b", "pipe curl to shell"),
-    (r"\bwget\b.*\|\s*(sudo\s+)?(ba)?sh\b", "pipe wget to shell"),
-]
 
 
 class BashTool(Tool):
@@ -62,9 +45,8 @@ class BashTool(Tool):
     }
 
     async def execute(self, command: str, timeout: int = 120) -> str:
-        # safety check (runs before sandbox wrapping so blocked patterns
-        # are caught regardless of Docker)
-        warning = _check_dangerous(command)
+        # safety check — delegated to security.defaults
+        warning = check_dangerous(command)
         if warning:
             return f"⚠ Blocked: {warning}\nCommand: {command}\nIf intentional, modify the command to be more specific."
 
@@ -111,15 +93,6 @@ class BashTool(Tool):
             return out.strip() or "(no output)"
         except Exception as e:
             return f"Error running command: {e}"
-
-
-def _check_dangerous(cmd: str) -> str | None:
-    """Return a warning string if the command looks destructive, else None."""
-    for pattern, reason in _DANGEROUS_PATTERNS:
-        if re.search(pattern, cmd):
-            return reason
-    return None
-
 
 def _update_cwd(command: str, current_cwd: str):
     """Track directory changes from cd commands, per thread."""

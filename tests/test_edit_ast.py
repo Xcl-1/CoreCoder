@@ -4,7 +4,6 @@ import pytest
 
 from corecoder.tools import get_tool
 
-
 # --- helper --------------------------------------------------------------
 
 def _ast_tool():

@@ -2,10 +2,10 @@
 
 import pytest
 
-from corecoder import Agent, LLM, Config, ALL_TOOLS, __version__
+from corecoder import ALL_TOOLS, LLM, Agent, Config, __version__
 from corecoder import session as session_module
 from corecoder.context import ContextManager, estimate_tokens
-from corecoder.session import save_session, load_session, list_sessions
+from corecoder.session import list_sessions, load_session, save_session
 from corecoder.tools import get_tool
 
 
@@ -196,7 +196,7 @@ async def test_agent_tool_scope_is_per_instance():
     class _TC:
         name = "bash"  # a real, registered tool - but not in this agent's set
         id = "x"
-        arguments = {"command": "echo hi"}
+        arguments: dict = {"command": "echo hi"}  # noqa: RUF012
 
     result, _elapsed, _success = await agent._exec_tool(_TC())
     assert "unknown tool 'bash'" in result
@@ -210,7 +210,7 @@ async def test_exec_tool_distinguishes_bad_args_from_internal_error():
     class _Boom(Tool):
         name = "boom"
         description = "raises TypeError internally"
-        parameters = {"type": "object", "properties": {}, "required": []}
+        parameters: dict = {"type": "object", "properties": {}, "required": []}  # noqa: RUF012
 
         async def execute(self):
             raise TypeError("internal explosion")
