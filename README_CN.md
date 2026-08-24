@@ -182,11 +182,14 @@ README 只给方向，每条的代码细节第七篇接着讲。挑一个动手�
 /compact         手动压缩上下文
 /tokens          查看 token 用量和费用估算
 /diff            查看本次会话改过的文件
-/save  /sessions 保存 / 列出会话
+/save  /sessions 手动检查点 / 列出全部会话
+/memory          查看跨会话记忆
 quit / exit      退出（Ctrl+C 取消当前回合）
 ```
 
-会话 ID 会先清洗成安全字符再拿去当文件名，存档统统落在 `~/.corecoder/sessions` 里，恶意会话名穿越不出去。
+完整对话会在每轮结束后自动保存到 `~/.corecoder/sessions`；`/save` 可手动建立检查点，`/sessions` 列出全部历史会话，`corecoder -r <ID>` 可恢复续聊。会话 ID 会先清洗成安全字符，恶意名称无法路径穿越。
+
+退出时，CoreCoder 会把稳定的用户偏好、项目约定和历史反馈提取成 Markdown，存入 `~/.corecoder/memory`，下次会话自动检索相关内容。`/memory` 会显示当前实际目录，使用 `/memory forget <id>` 删除单条记忆，设置 `CORECODER_MEMORY=0` 可关闭，`CORECODER_MEMORY_DIR` 可修改目录。
 
 ## 相关项目
 

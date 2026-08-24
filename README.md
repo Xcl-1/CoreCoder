@@ -182,11 +182,14 @@ Inside the REPL, `/help` lists everything; these are the ones you'll reach for:
 /compact         compact the context by hand
 /tokens          token usage and cost estimate
 /diff            files changed this session
-/save  /sessions save / list sessions
+/save  /sessions checkpoint / list all sessions
+/memory          list learned cross-session memories
 quit / exit      exit (Ctrl+C cancels the current round)
 ```
 
-Session IDs are sanitized to safe characters before they become filenames, every archive lands under `~/.corecoder/sessions`, and a malicious session name can't traverse out.
+Complete conversations are automatically checkpointed after every turn under `~/.corecoder/sessions`; `/save` creates an explicit checkpoint, `/sessions` lists every saved conversation, and `corecoder -r <id>` resumes one. Session IDs are sanitized before becoming filenames.
+
+On exit, CoreCoder extracts durable preferences, project conventions, and feedback into Markdown files under `~/.corecoder/memory`; relevant entries are injected into the next session. `/memory` shows the active directory, `/memory forget <id>` removes one entry, `CORECODER_MEMORY=0` disables learning, and `CORECODER_MEMORY_DIR` changes the location.
 
 ## Related Projects
 

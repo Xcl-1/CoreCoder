@@ -17,7 +17,8 @@ from . import __version__
 from .agent import Agent
 from .config import Config
 from .llm import LLM, LiteLLM
-from .security import AuditLogger, Guard, PermissionRule
+from .memory import MemoryEngine
+from .security import Guard, PermissionRule
 from .session import list_sessions, load_session, save_session
 
 console = Console()
@@ -88,7 +89,14 @@ def main():
     # security layer — interactive confirmation callback
     guard = Guard(confirm_callback=_cli_confirm)
     _cli_confirm._guard = guard  # enable "always allow" via callback attribute
-    agent = Agent(llm=llm, max_context_tokens=config.max_context_tokens, guard=guard)
+    memory = _create_memory_engine(config, llm)
+    agent = Agent(
+        llm=llm,
+        max_context_tokens=config.max_context_tokens,
+        guard=guard,
+        memory=memory,
+        session_id=args.resume,
+    )
 
     # resume saved session
     if args.resume:
@@ -106,7 +114,11 @@ def main():
 
     # one-shot mode
     if args.prompt:
-        _run_once(agent, args.prompt)
+        try:
+            _run_once(agent, args.prompt)
+        finally:
+            _save_current_session(agent, config)
+            agent.close()
         return
 
     # interactive REPL
@@ -141,6 +153,7 @@ def _repl(agent: Agent, config: Config):
         f"[bold]CoreCoder[/bold] v{__version__}\n"
         f"Model: [cyan]{config.model}[/cyan]"
         + (f"  Base: [dim]{config.base_url}[/dim]" if config.base_url else "")
+        + f"\nSession: [dim]{agent.session_id}[/dim] (auto-save enabled)"
         + replay_info
         + "\nType [bold]/help[/bold] for commands, [bold]Ctrl+C[/bold] to cancel, [bold]quit[/bold] to exit.",
         border_style="blue",
@@ -183,8 +196,11 @@ def _repl(agent: Agent, config: Config):
             _show_help()
             continue
         if user_input == "/reset":
+            _save_current_session(agent, config)
+            learned = agent.learn()
             agent.reset()
-            console.print("[yellow]Conversation reset.[/yellow]")
+            suffix = f" Learned {len(learned)} memories." if learned else ""
+            console.print(f"[yellow]Conversation reset.[/yellow]{suffix}")
             continue
         if user_input == "/tokens":
             p = agent.llm.total_prompt_tokens
@@ -215,9 +231,12 @@ def _repl(agent: Agent, config: Config):
                 console.print(f"[dim]Nothing to compress ({before} tokens, {len(agent.messages)} messages)[/dim]")
             continue
         if user_input == "/save":
-            sid = save_session(agent.messages, config.model)
-            console.print(f"[green]Session saved: {sid}[/green]")
-            console.print(f"Resume with: corecoder -r {sid}")
+            sid = _save_current_session(agent, config)
+            if sid:
+                console.print(f"[green]Session saved: {sid}[/green]")
+                console.print(f"Resume with: corecoder -r {sid}")
+            else:
+                console.print("[dim]Nothing to save yet.[/dim]")
             continue
         if user_input == "/diff":
             from .tools.edit import _changed_files
@@ -249,6 +268,16 @@ def _repl(agent: Agent, config: Config):
             else:
                 for s in sessions:
                     console.print(f"  [cyan]{s['id']}[/cyan] ({s['model']}, {s['saved_at']}) {s['preview']}")
+            continue
+        if user_input == "/memory":
+            _show_memory(agent, config)
+            continue
+        if user_input.startswith("/memory forget "):
+            memory_id = user_input[len("/memory forget "):].strip()
+            if agent.memory and agent.memory.forget(memory_id):
+                console.print(f"[green]Forgot memory: {memory_id}[/green]")
+            else:
+                console.print(f"[yellow]Memory not found: {memory_id}[/yellow]")
             continue
         if user_input == "/permissions":
             _show_permissions(agent)
@@ -290,7 +319,10 @@ def _repl(agent: Agent, config: Config):
         except Exception:
             logger.exception("Error in agent chat loop")
             console.print("\n[red]An unexpected error occurred. Set CORECODER_DEBUG=1 for details.[/red]")
+        finally:
+            _save_current_session(agent, config)
 
+    _save_current_session(agent, config)
     agent.close()
 
 
@@ -390,6 +422,8 @@ def _show_help():
         "  /plan <task>   Generate and execute a structured plan\n"
         "  /save          Save session to disk\n"
         "  /sessions      List saved sessions\n"
+        "  /memory        List cross-session memories\n"
+        "  /memory forget <id> Delete one memory\n"
         "  /permissions   List security rules\n"
         "  /permit <t> <p> Add an allow rule\n"
         "  /deny <t> <p> Add a deny rule\n"
@@ -402,6 +436,46 @@ def _show_help():
         title="CoreCoder Help",
         border_style="dim",
     ))
+
+
+def _create_memory_engine(config: Config, llm):
+    if not config.memory_enabled:
+        return None
+    return MemoryEngine(
+        llm=llm,
+        root=config.memory_dir,
+        project_path=os.getcwd(),
+        top_k=config.memory_top_k,
+    )
+
+
+def _save_current_session(agent: Agent, config: Config) -> str | None:
+    """Atomically checkpoint the current conversation under one stable id."""
+    if not agent.messages:
+        return None
+    try:
+        session_id = save_session(agent.messages, config.model, agent.session_id)
+        agent.session_id = session_id
+        return session_id
+    except (OSError, ValueError):
+        logger.warning("Could not auto-save session %s", agent.session_id, exc_info=True)
+        return None
+
+
+def _show_memory(agent: Agent, config: Config):
+    if agent.memory is None:
+        console.print("Memory: [yellow]disabled[/yellow]")
+        console.print(f"Directory: [dim]{config.memory_dir}[/dim]")
+        return
+    console.print("Memory: [green]enabled[/green]")
+    console.print(f"Directory: [dim]{agent.memory.store.root}[/dim]")
+    stats = agent.memory.stats()
+    console.print(
+        f"Memories: [bold]{stats['total']}[/bold] "
+        f"([cyan]{stats['global']}[/cyan] global, [cyan]{stats['project']}[/cyan] project)"
+    )
+    for memory in agent.memory.store.list()[:10]:
+        console.print(f"  [cyan]{memory.id}[/cyan] [{memory.type}/{memory.scope}] {memory.description}")
 
 
 # ---- security helpers --------------------------------------------------

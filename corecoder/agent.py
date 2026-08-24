@@ -22,6 +22,7 @@ import enum
 import inspect
 import logging
 import time
+import uuid
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -35,6 +36,7 @@ from .tools.agent import AgentTool
 from .tools.base import Tool
 
 if TYPE_CHECKING:
+    from .memory import MemoryEngine
     from .security import Guard
 
 logger = logging.getLogger(__name__)
@@ -98,6 +100,8 @@ class Agent:
         max_rounds: int = 50,
         replay: bool = True,
         guard: Guard | None = None,
+        memory: MemoryEngine | None = None,
+        session_id: str | None = None,
     ):
         self.llm = llm
         self.tools = tools if tools is not None else ALL_TOOLS
@@ -108,11 +112,16 @@ class Agent:
         self._system = system_prompt(self.tools)
         self._step_number = 0
         self.guard = guard
+        self.memory = memory
+        self._memory_prompt = ""
+        self._memory_context_loaded = False
+        self._memory_finalized = False
 
         # replay log — on by default in production, off in tests
         self._replay = ReplayLogger() if replay else None
         if self._replay:
             self._replay.open()
+        self.session_id = session_id or self._new_session_id()
 
         # wire up sub-agent capability
         for t in self.tools:
@@ -120,7 +129,10 @@ class Agent:
                 t._parent_agent = self
 
     def _full_messages(self) -> list[dict]:
-        return [{"role": "system", "content": self._system}] + self.messages
+        system = self._system
+        if self._memory_prompt:
+            system = f"{system}\n\n{self._memory_prompt}"
+        return [{"role": "system", "content": system}] + self.messages
 
     def _tool_schemas(self) -> list[dict]:
         return [t.schema() for t in self.tools]
@@ -129,6 +141,7 @@ class Agent:
                    on_token: Callable[[str], None] | None = None,
                    on_tool: Callable[[str, dict[str, Any]], None] | None = None) -> str:
         """Process one user message. May involve multiple LLM/tool rounds."""
+        self._load_memory_context(user_input)
         self.messages.append({"role": "user", "content": user_input})
         await asyncio.to_thread(self.context.maybe_compress, self.messages, self.llm)
 
@@ -309,9 +322,39 @@ class Agent:
         """Clear conversation history."""
         self.messages.clear()
         self._step_number = 0
+        self._memory_prompt = ""
+        self._memory_context_loaded = False
+        self._memory_finalized = False
+        self.session_id = self._new_session_id()
+
+    @staticmethod
+    def _new_session_id() -> str:
+        return f"session_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+
+    def learn(self) -> list:
+        """Extract durable memory from this session once, without blocking shutdown."""
+        if self.memory is None or self._memory_finalized:
+            return []
+        self._memory_finalized = True
+        try:
+            return self.memory.learn(self.messages, self.session_id)
+        except Exception:
+            logger.warning("Failed to learn from session", exc_info=True)
+            return []
+
+    def _load_memory_context(self, user_input: str) -> None:
+        if self.memory is None or self._memory_context_loaded:
+            return
+        self._memory_context_loaded = True
+        try:
+            self._memory_prompt = self.memory.build_prompt(user_input)
+        except Exception:
+            logger.warning("Failed to retrieve cross-session memory", exc_info=True)
+            self._memory_prompt = ""
 
     def close(self):
-        """Close the replay log file. Safe to call multiple times."""
+        """Learn from the conversation and close replay. Safe to call repeatedly."""
+        self.learn()
         if self._replay:
             self._replay.close()
 

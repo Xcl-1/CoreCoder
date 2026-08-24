@@ -5,6 +5,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+def resolve_memory_dir(value: str | Path | None = None) -> Path:
+    """Resolve the configured memory directory for CLI and library callers."""
+    raw = value if value is not None else (os.getenv("CORECODER_MEMORY_DIR") or "~/.corecoder/memory")
+    return Path(raw).expanduser().resolve()
+
+
 def _load_dotenv():
     """Load .env from cwd, walking up to home dir. No-op if python-dotenv missing."""
     try:
@@ -34,6 +40,9 @@ class Config:
     temperature: float = 0.0
     max_context_tokens: int = 128_000
     provider: str = "openai"
+    memory_enabled: bool = True
+    memory_dir: Path = Path.home() / ".corecoder" / "memory"
+    memory_top_k: int = 5
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -50,6 +59,8 @@ class Config:
         temperature_raw = os.getenv("CORECODER_TEMPERATURE", "0")
         max_context_raw = os.getenv("CORECODER_MAX_CONTEXT", "128000")
         provider = os.getenv("CORECODER_PROVIDER", "openai")
+        memory_raw = os.getenv("CORECODER_MEMORY", "1").strip().lower()
+        memory_top_k_raw = os.getenv("CORECODER_MEMORY_TOP_K", "5")
 
         # --- validation --------------------------------------------------
         try:
@@ -90,6 +101,21 @@ class Config:
                 f"CORECODER_PROVIDER must be 'openai' or 'litellm', got: {provider!r}"
             )
 
+        if memory_raw not in ("1", "true", "yes", "0", "false", "no"):
+            raise ValueError(
+                f"CORECODER_MEMORY must be a boolean, got: {memory_raw!r}"
+            )
+        try:
+            memory_top_k = int(memory_top_k_raw)
+        except ValueError:
+            raise ValueError(
+                f"CORECODER_MEMORY_TOP_K must be an integer, got: {memory_top_k_raw!r}"
+            )
+        if not (1 <= memory_top_k <= 20):
+            raise ValueError(
+                f"CORECODER_MEMORY_TOP_K must be 1-20, got: {memory_top_k}"
+            )
+
         return cls(
             model=os.getenv("CORECODER_MODEL", "gpt-5.5"),
             api_key=api_key,
@@ -98,4 +124,7 @@ class Config:
             temperature=temperature,
             max_context_tokens=max_context_tokens,
             provider=provider,
+            memory_enabled=memory_raw in ("1", "true", "yes"),
+            memory_dir=resolve_memory_dir(),
+            memory_top_k=memory_top_k,
         )
