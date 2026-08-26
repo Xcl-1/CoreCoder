@@ -187,7 +187,7 @@ README 只给方向，每条的代码细节第七篇接着讲。挑一个动手�
 quit / exit      退出（Ctrl+C 取消当前回合）
 ```
 
-完整对话会在每轮结束后自动保存到 `~/.corecoder/sessions`；`/save` 可手动建立检查点，`/sessions` 列出全部历史会话，`corecoder -r <ID>` 可恢复续聊。会话 ID 会先清洗成安全字符，恶意名称无法路径穿越。
+完整对话会在每轮结束后自动保存到 `~/.corecoder/sessions`；`/save` 可手动建立检查点，`/sessions` 列出全部历史会话，`corecoder -r <ID>` 可恢复续聊，并在交互模式下回显已保存的用户与助手消息。为保持终端清晰，历史工具结果默认隐藏。会话 ID 会先清洗成安全字符，恶意名称无法路径穿越。
 
 退出时，CoreCoder 会把稳定的用户偏好、项目约定和历史反馈提取成 Markdown，存入 `~/.corecoder/memory`，下次会话自动检索相关内容。`/memory` 会显示当前实际目录，使用 `/memory forget <id>` 删除单条记忆，设置 `CORECODER_MEMORY=0` 可关闭，`CORECODER_MEMORY_DIR` 可修改目录。
 

@@ -137,3 +137,109 @@ MCP 协议集成：接入外部工具生态
 向后兼容（不传新参数的 Agent() 行为不变）
 无外部数据库，延续文件级存储
 一个模块一个 PR，各阶段独立交付
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+结合现有 Agent + Role + Session + Prompt 架构，建议按下面两阶段实施。此次仅规划，没有修改代码。
+阶段三：自进化记忆系统
+目标：完成“会话提取 → 文件存储 → 相关检索 → 新会话注入”的闭环。
+1. 建立 Memory 模块
+在 corecoder/memory/ 下新增：
+- models.py：记忆类型及数据模型
+- store.py：Markdown 记忆的增删改查
+- index.py：生成和维护 MEMORY.md
+- extractor.py：调用 LLM 分析会话
+- retriever.py：关键词匹配和排序
+- engine.py：统一编排生命周期
+- __init__.py：公开接口
+存储位置默认为 ~/.corecoder/memory/，每条记忆一个 Markdown 文件。
+2. 实现提取和合并
+会话结束时：
+1. 过滤工具输出、临时信息和敏感数据。
+2. 让 LLM 提取用户偏好、项目约定和明确反馈。
+3. 与现有候选记忆比较。
+4. 输出 create / merge / ignore 操作。
+5. 更新 Markdown 文件并重建索引。
+需要保证重复关闭或重复提取不会产生多份相同记忆。
+3. 实现新会话检索
+首次收到用户消息时：
+- 按标题、关键词、类型和项目范围计算相关度。
+- 返回 Top-K 记忆。
+- 作为临时系统提示词片段注入。
+- 不写入 agent.messages，避免污染会话存档和上下文压缩。
+用户偏好可全局生效，项目约定只在对应项目目录下生效。
+4. 接入生命周期
+主要修改：
+- [agent.py](D:/develop/Project/Python/CoreCoder/corecoder/agent.py)：接入检索和会话结束提取
+- [cli.py](D:/develop/Project/Python/CoreCoder/corecoder/cli.py)：确保交互模式、单次模式和 /reset 都正确结束会话
+- [config.py](D:/develop/Project/Python/CoreCoder/corecoder/config.py)：增加启用开关、目录和 Top-K 配置
+预计 1–2 周，Memory 包约 410 行，不包含测试和少量集成代码。
+阶段四：Skill 能力体系
+目标：通过加载 Skill 提示词定制 Agent 行为，不改变工具执行机制。
+1. 建立 Skill 模块
+在 corecoder/skills/ 下新增：
+- base.py：Skill、SkillMatch
+- registry.py：注册、覆盖和查询
+- router.py：意图计分与排序
+- loader.py：加载用户 Skill 文件
+- builtins/：三个内置 Skill
+- __init__.py：公开接口
+2. 实现意图路由
+每次收到新的用户请求时：
+- 正则 trigger 命中获得较高分。
+- 多个关键词命中后累积加分。
+- 过滤低置信度结果。
+- 按 confidence 排序，最多激活 1–2 个 Skill。
+Skill 只提供提示词片段，不调用、增加或限制工具。
+3. 提供三个内置 Skill
+- code-review：正确性、安全性、边界情况和可维护性审查
+- test-gen：分析现有测试风格，补充正常、异常和边界用例
+- refactor：保持行为不变，小步修改并验证测试
+4. 加载用户 Skill
+启动时扫描：
+~/.corecoder/skills/*.skill.md
+文件头保存名称、描述、triggers、keywords 和优先级，正文作为提示词片段。格式错误的文件跳过并记录警告；同名用户 Skill 可以覆盖内置 Skill。
+5. 与 Role 体系组合
+统一系统提示词组装顺序：
+基础提示词
+→ 相关记忆
+→ 激活的 Skill
+→ Role 约束
+Role 权限和工具限制优先于 Skill，确保 Reviewer/Researcher 不会因为 Skill 而获得写权限。
+预计 1–2 周，Skills 包约 360 行。
+验收重点
+- 会话 A 产生记忆，会话 B 能自动检索并遵循。
+- 相同信息重复出现时更新原记忆，不创建副本。
+- 项目记忆不会泄漏到其他项目。
+- Skill 路由结果稳定、置信度排序正确。
+- 自定义 .skill.md 无需修改源码即可生效。
+- Memory 或 Skill 加载失败不能阻塞正常聊天。
+- 现有 Role、Session、安全系统和全部测试保持兼容。
+建议实施顺序为：先完成 Memory 的存储与检索，再接入 LLM 提取；随后完成 Skill 路由和内置 Skill，最后统一整理系统提示词组装链路。

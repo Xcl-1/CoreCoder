@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -12,6 +13,7 @@ from prompt_toolkit.key_binding import KeyBindings
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.text import Text
 
 from . import __version__
 from .agent import Agent
@@ -122,7 +124,7 @@ def main():
         return
 
     # interactive REPL
-    _repl(agent, config)
+    _repl(agent, config, show_history=bool(args.resume))
 
 
 def _run_once(agent: Agent, prompt: str):
@@ -144,7 +146,7 @@ def _run_once(agent: Agent, prompt: str):
     print()
 
 
-def _repl(agent: Agent, config: Config):
+def _repl(agent: Agent, config: Config, show_history: bool = False):
     """Interactive read-eval-print loop."""
     replay_info = ""
     if agent._replay:
@@ -158,6 +160,9 @@ def _repl(agent: Agent, config: Config):
         + "\nType [bold]/help[/bold] for commands, [bold]Ctrl+C[/bold] to cancel, [bold]quit[/bold] to exit.",
         border_style="blue",
     ))
+
+    if show_history:
+        _show_history(agent.messages)
 
     hist_path = os.path.expanduser("~/.corecoder_history")
     history = FileHistory(hist_path)
@@ -324,6 +329,88 @@ def _repl(agent: Agent, config: Config):
 
     _save_current_session(agent, config)
     agent.close()
+
+
+def _show_history(messages: list[dict]) -> None:
+    """Render the human-facing portion of a resumed conversation."""
+    if not messages:
+        return
+
+    summary_prefixes = (
+        "[Conversation summary — incremental]",
+        "[Hard context reset]",
+    )
+    summary_acknowledgements = {
+        "Understood. I have the full context.",
+        "Context restored. Continuing from where we left off.",
+    }
+    hidden_tool_results = 0
+
+    console.rule("[bold]Previous conversation[/bold]", style="dim")
+    for message in messages:
+        role = message.get("role", "")
+        content = message.get("content")
+        if content is None:
+            text = ""
+        elif isinstance(content, str):
+            text = content
+        else:
+            text = str(content)
+
+        if role == "tool":
+            hidden_tool_results += 1
+            continue
+
+        if role == "user":
+            if text.startswith(summary_prefixes):
+                console.print(Panel(
+                    Markdown(text),
+                    title="[bold yellow]Conversation summary[/bold yellow]",
+                    border_style="yellow",
+                    padding=(0, 1),
+                ))
+            elif text:
+                # Text keeps user-provided Rich markup literal.
+                console.print(Panel(
+                    Text(text),
+                    title="[bold cyan]You[/bold cyan]",
+                    border_style="cyan",
+                    padding=(0, 1),
+                ))
+            continue
+
+        if role != "assistant":
+            continue
+
+        if text and text not in summary_acknowledgements:
+            console.print(Panel(
+                Markdown(text),
+                title="[bold green]CoreCoder[/bold green]",
+                border_style="green",
+                padding=(0, 1),
+            ))
+
+        for tool_call in message.get("tool_calls") or []:
+            function = tool_call.get("function") or {}
+            name = str(function.get("name") or "unknown")
+            raw_arguments = function.get("arguments") or {}
+            if isinstance(raw_arguments, str):
+                try:
+                    arguments = json.loads(raw_arguments)
+                except json.JSONDecodeError:
+                    arguments = {"arguments": raw_arguments}
+            else:
+                arguments = raw_arguments
+            if not isinstance(arguments, dict):
+                arguments = {"arguments": arguments}
+            console.print(Text(f"> {name}({_brief(arguments)})", style="dim"))
+
+    if hidden_tool_results:
+        console.print(Text(
+            f"{hidden_tool_results} tool result(s) hidden from history.",
+            style="dim",
+        ))
+    console.rule(style="dim")
 
 
 async def _do_plan(agent: Agent, task: str):

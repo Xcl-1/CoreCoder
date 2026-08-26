@@ -187,7 +187,7 @@ Inside the REPL, `/help` lists everything; these are the ones you'll reach for:
 quit / exit      exit (Ctrl+C cancels the current round)
 ```
 
-Complete conversations are automatically checkpointed after every turn under `~/.corecoder/sessions`; `/save` creates an explicit checkpoint, `/sessions` lists every saved conversation, and `corecoder -r <id>` resumes one. Session IDs are sanitized before becoming filenames.
+Complete conversations are automatically checkpointed after every turn under `~/.corecoder/sessions`; `/save` creates an explicit checkpoint, `/sessions` lists every saved conversation, and `corecoder -r <id>` resumes one and displays its saved user/assistant history in interactive mode. Tool results stay hidden to keep the terminal readable. Session IDs are sanitized before becoming filenames.
 
 On exit, CoreCoder extracts durable preferences, project conventions, and feedback into Markdown files under `~/.corecoder/memory`; relevant entries are injected into the next session. `/memory` shows the active directory, `/memory forget <id>` removes one entry, `CORECODER_MEMORY=0` disables learning, and `CORECODER_MEMORY_DIR` changes the location.
 
