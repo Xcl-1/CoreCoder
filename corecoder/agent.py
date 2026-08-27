@@ -116,12 +116,12 @@ class Agent:
         self._memory_prompt = ""
         self._memory_context_loaded = False
         self._memory_finalized = False
+        self.session_id = session_id or self._new_session_id()
 
         # replay log — on by default in production, off in tests
-        self._replay = ReplayLogger() if replay else None
+        self._replay = ReplayLogger(self.session_id) if replay else None
         if self._replay:
             self._replay.open()
-        self.session_id = session_id or self._new_session_id()
 
         # wire up sub-agent capability
         for t in self.tools:
@@ -326,6 +326,10 @@ class Agent:
         self._memory_context_loaded = False
         self._memory_finalized = False
         self.session_id = self._new_session_id()
+        if self._replay:
+            self._replay.close()
+            self._replay = ReplayLogger(self.session_id)
+            self._replay.open()
 
     @staticmethod
     def _new_session_id() -> str:
@@ -337,13 +341,16 @@ class Agent:
             return []
         self._memory_finalized = True
         try:
+            replay_path = self._replay.path if self._replay else None
+            if replay_path:
+                return self.memory.learn(self.messages, self.session_id, replay_path=replay_path)
             return self.memory.learn(self.messages, self.session_id)
         except Exception:
             logger.warning("Failed to learn from session", exc_info=True)
             return []
 
     def _load_memory_context(self, user_input: str) -> None:
-        if self.memory is None or self._memory_context_loaded:
+        if self.memory is None:
             return
         self._memory_context_loaded = True
         try:
@@ -351,6 +358,16 @@ class Agent:
         except Exception:
             logger.warning("Failed to retrieve cross-session memory", exc_info=True)
             self._memory_prompt = ""
+
+    def checkpoint_memory(self) -> None:
+        """Queue the latest exchange so an interrupted process can learn later."""
+        if self.memory is None or not hasattr(self.memory, "checkpoint"):
+            return
+        try:
+            replay_path = self._replay.path if self._replay else None
+            self.memory.checkpoint(self.messages, self.session_id, replay_path=replay_path)
+        except Exception:
+            logger.warning("Failed to checkpoint pending memory", exc_info=True)
 
     def close(self):
         """Learn from the conversation and close replay. Safe to call repeatedly."""

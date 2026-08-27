@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -67,6 +71,37 @@ class MemoryStore:
             return False
         path.unlink()
         return True
+
+    @contextmanager
+    def locked(self, timeout: float = 5.0, stale_after: float = 30.0) -> Iterator[None]:
+        """Cross-process lock for multi-file memory updates."""
+        self.root.mkdir(parents=True, exist_ok=True)
+        lock_path = self.root / ".memory.lock"
+        deadline = time.monotonic() + timeout
+        descriptor: int | None = None
+        while descriptor is None:
+            try:
+                descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(descriptor, str(os.getpid()).encode("ascii"))
+            except FileExistsError:
+                try:
+                    if time.time() - lock_path.stat().st_mtime > stale_after:
+                        lock_path.unlink()
+                        continue
+                except FileNotFoundError:
+                    continue
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"Timed out waiting for memory lock: {lock_path}")
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            try:
+                lock_path.unlink()
+            except FileNotFoundError:
+                pass
 
     def _path(self, memory_id: str) -> Path:
         safe_id = normalize_memory_id(memory_id)

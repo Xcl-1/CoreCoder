@@ -133,6 +133,35 @@ def test_replay_logger_path_property(tmp_path, monkeypatch):
         logger.close()
 
 
+def test_replay_session_id_path_traversal_is_neutralized(tmp_path, monkeypatch):
+    from corecoder import replay as replay_mod
+    monkeypatch.setattr(replay_mod, "REPLAYS_DIR", tmp_path)
+
+    logger = replay_mod.ReplayLogger(session_id="../../outside")
+    logger.open()
+    logger.close()
+
+    assert logger.path == (tmp_path / "outside.jsonl").resolve()
+
+
+def test_agent_replay_rotates_with_session_reset(tmp_path, monkeypatch):
+    from corecoder import replay as replay_mod
+    from corecoder.agent import Agent
+    from corecoder.llm import LLM
+
+    monkeypatch.setattr(replay_mod, "REPLAYS_DIR", tmp_path)
+    agent = Agent(llm=LLM.__new__(LLM), tools=[], replay=True, session_id="first-session")
+    first_path = agent._replay.path
+
+    agent.reset()
+    second_path = agent._replay.path
+    agent.close()
+
+    assert first_path.name == "first-session.jsonl"
+    assert second_path.name == f"{agent.session_id}.jsonl"
+    assert second_path != first_path
+
+
 def test_replay_disabled_does_not_create_file(tmp_path, monkeypatch):
     """Agent with replay=False must not touch the filesystem."""
     from corecoder import replay as replay_mod

@@ -8,6 +8,7 @@ import pytest
 
 from corecoder.agent import Agent
 from corecoder.llm import LLM
+from corecoder.prompt import system_prompt
 from corecoder.security import AuditEntry, AuditLogger, Guard, PermissionManager, PermissionRule
 from corecoder.security.defaults import builtin_rules, check_dangerous
 from corecoder.tools import get_tool
@@ -225,6 +226,48 @@ def test_guard_review_ask_with_callback_deny():
     g.permissions._all_sorted = None
     decision = g.review("bash", {"command": "some-cmd"})
     assert decision.allowed is False
+
+
+def test_persistent_permission_edits_require_explicit_confirmation(tmp_path):
+    permissions_path = tmp_path / ".corecoder" / "permissions.json"
+    manager = PermissionManager()
+    manager._user_rules = []
+    manager._project_rules = []
+    manager._all_sorted = None
+
+    blocked = Guard(permissions=manager).review(
+        "edit_file",
+        {
+            "file_path": str(permissions_path),
+            "old_string": "[]",
+            "new_string": "[{}]",
+        },
+    )
+    allowed = Guard(permissions=manager, confirm_callback=lambda *_args: True).review(
+        "write_file",
+        {"file_path": str(permissions_path), "content": "[]"},
+    )
+
+    assert blocked.allowed is False
+    assert "explicit user approval" in blocked.reason
+    assert allowed.allowed is True
+
+
+def test_dangerous_deny_wins_when_command_mentions_permissions_file():
+    decision = Guard(confirm_callback=lambda *_args: True).review(
+        "bash",
+        {"command": "rm -rf / # .corecoder/permissions.json"},
+    )
+
+    assert decision.allowed is False
+    assert "recursive delete" in decision.reason
+
+
+def test_system_prompt_forbids_unrequested_permission_bypass():
+    prompt = system_prompt([])
+
+    assert ".corecoder/permissions.json" in prompt
+    assert "only when the user explicitly requests it" in prompt
 
 
 def test_guard_frequency_throttle():

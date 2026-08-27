@@ -191,6 +191,65 @@ def test_extractor_rejects_one_off_task_instruction():
     assert result == []
 
 
+def test_extractor_rejects_reusable_summary_request_as_durable_fact():
+    request = "请运行 pytest，并总结以后验证记忆系统时可以重复使用的步骤。"
+    payload = [
+        {
+            "action": "create",
+            "title": f"False {memory_type} memory",
+            "description": "The user wants reusable verification steps",
+            "content": "Summarize the verification workflow for future sessions.",
+            "type": memory_type,
+            "scope": "project",
+            "keywords": ["pytest", "verification"],
+            "confidence": 0.9,
+            "evidence": request,
+        }
+        for memory_type in ("user", "profile", "feedback", "project", "reference")
+    ]
+    extractor = MemoryExtractor(_FakeLLM([json.dumps(payload, ensure_ascii=False)]))
+
+    result = extractor.extract(
+        [
+            {"role": "user", "content": request},
+            {"role": "assistant", "content": "测试完成，以下是验证步骤。"},
+        ],
+        [],
+    )
+
+    assert result == []
+
+
+def test_extractor_keeps_explicit_preference_profile_feedback_and_project_convention():
+    evidence = {
+        "user": "以后回答技术问题时保持简洁，并优先给出命令。",
+        "project": "以后这个项目的测试统一使用 pytest。",
+        "profile": "我是后端工程师，主要使用 Python。",
+        "feedback": "你刚才的回答太啰嗦了，请直接给出命令。",
+    }
+    payload = [
+        {
+            "action": "create",
+            "title": f"Valid {memory_type} memory",
+            "description": f"Durable {memory_type} information",
+            "content": text,
+            "type": memory_type,
+            "scope": "project" if memory_type == "project" else "global",
+            "keywords": [memory_type],
+            "confidence": 0.9,
+            "evidence": text,
+        }
+        for memory_type, text in evidence.items()
+    ]
+    extractor = MemoryExtractor(_FakeLLM([json.dumps(payload, ensure_ascii=False)]))
+    messages = [{"role": "user", "content": text} for text in evidence.values()]
+    messages.append({"role": "assistant", "content": "收到。"})
+
+    result = extractor.extract(messages, [])
+
+    assert [item.type for item in result] == ["user", "project", "profile", "feedback"]
+
+
 def test_engine_repairs_and_merges_chinese_preference_update(tmp_path):
     existing = _memory(
         title="Python 测试偏好",

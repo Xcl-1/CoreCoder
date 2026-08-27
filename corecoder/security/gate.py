@@ -36,6 +36,10 @@ _SENSITIVE_PATTERNS: list[tuple[str, str]] = [
         "[SECRET_REDACTED]",
     ),
 ]
+_PERSISTENT_PERMISSION_RE = re.compile(
+    r"(?:^|[\\/])\.corecoder[\\/]permissions\.json(?:[\"']|\s|$)",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -98,12 +102,31 @@ class Guard:
             self._audit(ts, tool_name, arguments, "deny", "builtin", decision.reason)
             return decision
 
+        # A deny decision always wins, including when a dangerous command also
+        # happens to mention a permission file.
+        if rule.action == "deny":
+            self._audit(ts, tool_name, arguments, "deny", rule.source, rule.reason)
+            return SecurityDecision(allowed=False, reason=rule.reason, rule=rule)
+
+        user_confirmed = False
+        if _targets_persistent_permissions(tool_name, arguments):
+            reason = "persistent permission changes require explicit user approval"
+            if self.confirm_callback is None:
+                self._audit(ts, tool_name, arguments, "deny", "builtin", f"{reason} — requires confirmation")
+                return SecurityDecision(allowed=False, reason=f"{reason} (requires confirmation)", rule=rule)
+            choice = self.confirm_callback(tool_name, arguments, reason)
+            if choice is not True:
+                suffix = "user denied" if choice is False else "user cancelled"
+                self._audit(ts, tool_name, arguments, "deny", "builtin", f"{reason} — {suffix}")
+                return SecurityDecision(allowed=False, reason=f"{reason} ({suffix})", rule=rule)
+            user_confirmed = True
+
         # ---- Layer 2: user confirmation for 'ask' rules ----
         if rule.action == "ask":
             if self.confirm_callback is not None:
                 user_choice = self.confirm_callback(tool_name, arguments, rule.reason)
                 if user_choice is True:
-                    pass  # confirmed — continue to next layer
+                    user_confirmed = True
                 elif user_choice is False:
                     self._audit(ts, tool_name, arguments, "deny", rule.source,
                                 f"{rule.reason} — user denied confirmation")
@@ -119,17 +142,14 @@ class Guard:
                             f"{rule.reason} — requires confirmation (non-interactive mode)")
                 return SecurityDecision(allowed=False, reason=f"{rule.reason} (requires confirmation)", rule=rule)
 
-        elif rule.action == "deny":
-            self._audit(ts, tool_name, arguments, "deny", rule.source, rule.reason)
-            return SecurityDecision(allowed=False, reason=rule.reason, rule=rule)
-
         # ---- Layer 3: frequency throttle ----
         freq_ok = True
         if rule.max_frequency is not None:
             freq_ok = self._check_frequency(tool_name, rule.max_frequency)
 
         self._audit(ts, tool_name, arguments, "allow", rule.source, rule.reason,
-                    freq_checked=rule.max_frequency is not None, freq_passed=freq_ok)
+                    freq_checked=rule.max_frequency is not None, freq_passed=freq_ok,
+                    user_confirmed=user_confirmed)
 
         if not freq_ok:
             return SecurityDecision(
@@ -197,3 +217,12 @@ def _summarise(tool_name: str, arguments: dict, max_len: int = 200) -> str:
     # generic fallback
     text = " ".join(str(v)[:80] for v in arguments.values())
     return f"{tool_name}: {text[:max_len]}"
+
+
+def _targets_persistent_permissions(tool_name: str, arguments: dict) -> bool:
+    if tool_name not in ("write_file", "edit_file", "edit_ast", "bash"):
+        return False
+    return any(
+        isinstance(value, str) and _PERSISTENT_PERMISSION_RE.search(value)
+        for value in arguments.values()
+    )

@@ -284,6 +284,21 @@ def _repl(agent: Agent, config: Config, show_history: bool = False):
             else:
                 console.print(f"[yellow]Memory not found: {memory_id}[/yellow]")
             continue
+        if user_input.startswith("/memory show "):
+            _show_memory_entry(agent, user_input[len("/memory show "):].strip())
+            continue
+        if user_input.startswith("/memory search "):
+            _search_memory(agent, user_input[len("/memory search "):].strip())
+            continue
+        if user_input.startswith("/memory archive "):
+            _archive_memory(agent, user_input[len("/memory archive "):].strip())
+            continue
+        if user_input.startswith("/memory approve "):
+            _approve_memory(agent, user_input[len("/memory approve "):].strip())
+            continue
+        if user_input == "/memory reflect":
+            _reflect_pending(agent)
+            continue
         if user_input == "/permissions":
             _show_permissions(agent)
             continue
@@ -511,6 +526,11 @@ def _show_help():
         "  /sessions      List saved sessions\n"
         "  /memory        List cross-session memories\n"
         "  /memory forget <id> Delete one memory\n"
+        "  /memory show <id> Show one memory\n"
+        "  /memory search <q> Search active memories\n"
+        "  /memory archive <id> Archive one memory\n"
+        "  /memory approve <id> Reactivate one memory\n"
+        "  /memory reflect Process pending session reflections\n"
         "  /permissions   List security rules\n"
         "  /permit <t> <p> Add an allow rule\n"
         "  /deny <t> <p> Add a deny rule\n"
@@ -528,12 +548,16 @@ def _show_help():
 def _create_memory_engine(config: Config, llm):
     if not config.memory_enabled:
         return None
-    return MemoryEngine(
+    engine = MemoryEngine(
         llm=llm,
         root=config.memory_dir,
         project_path=os.getcwd(),
         top_k=config.memory_top_k,
     )
+    recovered = engine.recover_pending()
+    if recovered:
+        logger.info("Recovered memory from %s interrupted session(s)", recovered)
+    return engine
 
 
 def _save_current_session(agent: Agent, config: Config) -> str | None:
@@ -543,6 +567,7 @@ def _save_current_session(agent: Agent, config: Config) -> str | None:
     try:
         session_id = save_session(agent.messages, config.model, agent.session_id)
         agent.session_id = session_id
+        agent.checkpoint_memory()
         return session_id
     except (OSError, ValueError):
         logger.warning("Could not auto-save session %s", agent.session_id, exc_info=True)
@@ -559,10 +584,98 @@ def _show_memory(agent: Agent, config: Config):
     stats = agent.memory.stats()
     console.print(
         f"Memories: [bold]{stats['total']}[/bold] "
-        f"([cyan]{stats['global']}[/cyan] global, [cyan]{stats['project']}[/cyan] project)"
+        f"([cyan]{stats['active']}[/cyan] active, [yellow]{stats['candidate']}[/yellow] candidate, "
+        f"[cyan]{stats['archived']}[/cyan] archived, [dim]{stats['superseded']}[/dim] superseded; "
+        f"[cyan]{stats['global']}[/cyan] global, [cyan]{stats['project']}[/cyan] project)"
     )
+    pending = agent.memory.pending_status()
+    console.print(f"Pending reflections: [bold]{len(pending)}[/bold]")
+    for item in pending[:5]:
+        line = Text("  pending ")
+        line.append(str(item["session_id"]), style="yellow")
+        line.append(f" attempts={item['attempts']} last_error={item['last_error']}")
+        console.print(line)
     for memory in agent.memory.store.list()[:10]:
-        console.print(f"  [cyan]{memory.id}[/cyan] [{memory.type}/{memory.scope}] {memory.description}")
+        line = Text("  ")
+        line.append(memory.id, style="cyan")
+        line.append(f" [{memory.type}/{memory.scope}/{memory.status}] ")
+        line.append(memory.description)
+        console.print(line)
+
+
+def _show_memory_entry(agent: Agent, memory_id: str) -> None:
+    if agent.memory is None:
+        console.print("[yellow]Memory is disabled.[/yellow]")
+        return
+    memory = agent.memory.store.get(memory_id)
+    if memory is None:
+        console.print(f"[yellow]Memory not found: {memory_id}[/yellow]")
+        return
+    metadata = (
+        f"Type: {memory.type}  Scope: {memory.scope}  Status: {memory.status}  Version: {memory.version}\n"
+        f"Uses: {memory.use_count}  Success/Failure: {memory.success_count}/{memory.failure_count}\n"
+        f"Independent validations: {memory.validation_count}  Last validated: {memory.validated_at or '-'}\n"
+        f"Keywords: {', '.join(memory.keywords) or '-'}\n"
+        f"Sources: {', '.join(memory.source_sessions) or '-'}"
+    )
+    console.print(Panel(Markdown(f"# {memory.title}\n\n{memory.content}\n\n---\n\n{metadata}"), border_style="blue"))
+
+
+def _search_memory(agent: Agent, query: str) -> None:
+    if agent.memory is None:
+        console.print("[yellow]Memory is disabled.[/yellow]")
+        return
+    if not query:
+        console.print("[yellow]Usage: /memory search <query>[/yellow]")
+        return
+    matches = agent.memory.search(query)
+    if not matches:
+        console.print("[dim]No matching active memories.[/dim]")
+        return
+    for match in matches:
+        memory = match.memory
+        line = Text("  ")
+        line.append(memory.id, style="cyan")
+        line.append(f" score={match.score:.4f} [{memory.type}/{memory.scope}] ")
+        line.append(memory.description)
+        console.print(line)
+
+
+def _archive_memory(agent: Agent, memory_id: str) -> None:
+    if agent.memory is None:
+        console.print("[yellow]Memory is disabled.[/yellow]")
+        return
+    archived = agent.memory.archive(memory_id)
+    if archived:
+        console.print(f"[green]Archived memory: {archived.id}[/green]")
+    else:
+        console.print(f"[yellow]Memory not found: {memory_id}[/yellow]")
+
+
+def _approve_memory(agent: Agent, memory_id: str) -> None:
+    if agent.memory is None:
+        console.print("[yellow]Memory is disabled.[/yellow]")
+        return
+    approved = agent.memory.approve(memory_id)
+    if approved:
+        console.print(f"[green]Approved memory: {approved.id}[/green]")
+    else:
+        console.print(f"[yellow]Memory not found: {memory_id}[/yellow]")
+
+
+def _reflect_pending(agent: Agent) -> None:
+    if agent.memory is None:
+        console.print("[yellow]Memory is disabled.[/yellow]")
+        return
+    recovered = agent.memory.recover_pending(exclude_session=agent.session_id, force=True)
+    pending = agent.memory.pending_status()
+    remaining = len(pending)
+    console.print(f"Processed [green]{recovered}[/green] pending session(s); [yellow]{remaining}[/yellow] remain.")
+    for item in pending[:5]:
+        console.print(
+            f"[yellow]{item['session_id']}[/yellow] attempts={item['attempts']} "
+            f"last_error={item['last_error']}"
+        )
 
 
 # ---- security helpers --------------------------------------------------

@@ -1,7 +1,7 @@
 """Cross-session memory for CoreCoder."""
 
 from .engine import MemoryEngine
-from .models import ExtractedMemory, Memory
+from .models import ExtractedMemory, Memory, SessionReflection
 from .retriever import MemoryRetriever, ScoredMemory
 from .store import MemoryStore
 
@@ -12,4 +12,5 @@ __all__ = [
     "MemoryRetriever",
     "MemoryStore",
     "ScoredMemory",
+    "SessionReflection",
 ]
