@@ -14,14 +14,16 @@ from corecoder.llm import LLM, LiteLLM, LLMResponse
 
 
 class _Delta:
-    def __init__(self, content=None, tool_calls=None):
+    def __init__(self, content=None, tool_calls=None, reasoning_content=None):
         self.content = content
         self.tool_calls = tool_calls
+        self.reasoning_content = reasoning_content
 
 
 class _Choice:
-    def __init__(self, delta):
+    def __init__(self, delta, finish_reason=None):
         self.delta = delta
+        self.finish_reason = finish_reason
 
 
 class _Usage:
@@ -31,8 +33,14 @@ class _Usage:
 
 
 class _Chunk:
-    def __init__(self, content=None, usage=None, tool_calls=None):
-        self.choices = [_Choice(_Delta(content=content, tool_calls=tool_calls))] if content or tool_calls else []
+    def __init__(self, content=None, usage=None, tool_calls=None, reasoning_content=None, finish_reason=None):
+        has_choice = content or tool_calls or reasoning_content or finish_reason
+        self.choices = [
+            _Choice(
+                _Delta(content=content, tool_calls=tool_calls, reasoning_content=reasoning_content),
+                finish_reason=finish_reason,
+            )
+        ] if has_choice else []
         self.usage = usage
 
 
@@ -195,6 +203,39 @@ class TestChat:
         llm.chat(messages=[{"role": "user", "content": "hi"}])
         call_kwargs = self.fake.completion.call_args[1]
         assert call_kwargs["stream_options"] == {"include_usage": True}
+
+    def test_preserves_reasoning_and_finish_reason(self):
+        self.fake.completion.return_value = iter([
+            _Chunk(reasoning_content="private reasoning"),
+            _Chunk(content="answer", finish_reason="stop"),
+            _Chunk(usage=_Usage()),
+        ])
+        llm = LiteLLM(model="deepseek/deepseek-v4-flash")
+        result = llm.chat(messages=[{"role": "user", "content": "hi"}])
+
+        assert result.content == "answer"
+        assert result.reasoning_content == "private reasoning"
+        assert result.finish_reason == "stop"
+        assert result.message["reasoning_content"] == "private reasoning"
+
+
+def test_openai_compatible_chat_preserves_reasoning_and_finish_reason():
+    llm = LLM.__new__(LLM)
+    llm.model = "deepseek-v4-flash"
+    llm.extra = {}
+    llm.total_prompt_tokens = 0
+    llm.total_completion_tokens = 0
+    llm._call_with_retry = lambda _params: iter([
+        _Chunk(reasoning_content="private reasoning"),
+        _Chunk(content="answer", finish_reason="stop"),
+        _Chunk(usage=_Usage()),
+    ])
+
+    result = llm.chat(messages=[{"role": "user", "content": "hi"}])
+
+    assert result.content == "answer"
+    assert result.reasoning_content == "private reasoning"
+    assert result.finish_reason == "stop"
 
 
 # ---------------------------------------------------------------------------

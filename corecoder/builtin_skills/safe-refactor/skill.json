@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "id": "coding.safe-refactor",
+  "name": "Safe Refactoring",
+  "version": "1.0.0",
+  "summary": "Refactor existing code while preserving observable behavior and public contracts.",
+  "category": ["coding", "refactoring", "quality"],
+  "tags": ["refactor", "refactoring", "重构", "cleanup", "rename"],
+  "aliases": ["safe refactor", "安全重构"],
+  "intents": ["refactor this code", "重构这段代码", "rename without behavior change"],
+  "applies_when": ["The requested change should preserve externally visible behavior."],
+  "not_when": ["change behavior", "新增功能", "fix a bug"],
+  "examples": {
+    "positive": ["Refactor this module without changing its behavior", "重构这段代码但保持现有行为"],
+    "negative": ["Change the API and add a new feature", "修改业务行为并新增功能"]
+  },
+  "tools": {
+    "required": ["read_file", "grep"],
+    "recommended": ["edit_ast", "edit_file", "bash"],
+    "forbidden": []
+  },
+  "exclusive_group": "implementation-mode",
+  "token_budget": 1000,
+  "status": "active"
+}

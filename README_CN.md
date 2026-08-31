@@ -182,17 +182,28 @@ README 只给方向，每条的代码细节第七篇接着讲。挑一个动手�
 /compact         手动压缩上下文
 /tokens          查看 token 用量和费用估算
 /diff            查看本次会话改过的文件
+/undo            撤销写入/编辑工具的修改（`/undo force` 强制覆盖冲突）
 /save  /sessions 手动检查点 / 列出全部会话
 /memory          查看跨会话记忆和待反思会话
 /memory show <id> / search <查询> / archive <id> / approve <id> / reflect
+/skills          列出内置、用户和项目 Skill
+/skill search <查询> / show <id> / use <id> / unuse <id> / explain
 quit / exit      退出（Ctrl+C 取消当前回合）
 ```
 
 完整对话会在每轮结束后自动保存到 `~/.corecoder/sessions`；`/save` 可手动建立检查点，`/sessions` 列出全部历史会话，`corecoder -r <ID>` 可恢复续聊，并在交互模式下回显已保存的用户与助手消息。为保持终端清晰，历史工具结果默认隐藏。会话 ID 会先清洗成安全字符，恶意名称无法路径穿越。
 
+`/undo` 会恢复当前 CoreCoder 进程中由 `write_file`、`edit_file` 或 `edit_ast` 修改文件的原始字节，并删除这些工具新建的文件；同一文件即使被多次编辑，也会回到第一次修改之前。如果文件在 Agent 最后一次写入后又被外部修改，普通撤销会将其保留并报告冲突；只有显式执行 `/undo force` 才会覆盖。撤销历史在 `/reset` 后仍保留，但不会跨进程或随恢复会话持久化。`bash` 产生的任意文件系统副作用无法可靠追踪，不在撤销保证范围内。
+
 退出时，CoreCoder 会先结合 Replay 反思执行结果，再把稳定的用户偏好、用户画像、项目约定、历史反馈、经过验证的程序性经验和有价值的任务情景提取成 Markdown，存入 `~/.corecoder/memory`。此后每轮用户输入都会按当前问题和项目范围重新检索活跃记忆，使用次数与成功/失败反馈会参与后续排序；检索也会搜索用户原始 evidence，因此中文请求被总结成英文后仍能用中文召回。每个完整回合还会写入待反思检查点；如果进程异常退出，后续启动会自动补偿处理。`/memory` 会显示 pending 的重试次数和最近提取错误，连续失败三次后进入隔离区。记忆支持证据、版本、候选/活跃/归档/替换状态、自动重建的 `MEMORY.md` 以及跨进程更新锁。
 
 使用 `/memory show <id>` 查看详情、`/memory search <查询>` 搜索、`/memory archive <id>` 归档、`/memory approve <id>` 显式启用、`/memory reflect` 重试待处理会话、`/memory forget <id>` 永久删除。设置 `CORECODER_MEMORY=0` 可关闭，`CORECODER_MEMORY_DIR` 可修改目录。程序性记忆必须有真实成功工具调用和原文验证证据；若常规提取遗漏 procedure 或返回错误格式，独立的受约束提炼仍可保存已验证的执行记忆，pending 恢复会优先运行这一结构化通道。情景记忆必须有真实失败工具调用以及有证据的失败或根因经验，两者都限制为项目作用域。“运行、分析、总结任务”的请求即使提到以后复用，也不会被当作用户画像或项目记忆；经过验证的复用步骤应保存为 procedure。历史上仅由此类任务证据生成的误判文件仍保留用于审计，但不再参与检索。新生成的执行类记忆首先进入不可检索的 candidate 状态，第二个独立会话再次验证后自动晋升 active，也可以用 `/memory approve <id>` 人工启用。反思前会折叠重复 Replay 噪声。修改持久化 `.corecoder/permissions.json` 必须得到用户明确确认，代理不能为了绕过命令拦截而静默改写。系统不会根据记忆自动生成或安装可执行 Skill，Skill 晋升仍需单独审核。
+
+### Skill
+
+Skill 是构建在原子 Tool 之上的可复用任务指导。CoreCoder 会发现包内置 Skill、`~/.corecoder/skills` 下的用户 Skill，以及项目 `.corecoder/skills` 下的项目 Skill；同一 ID 按项目、用户、内置的顺序覆盖。每个 Skill 包含一份轻量 `skill.json` 元信息和完整 `SKILL.md` 指令。路由先根据 ID、标签、意图、别名、适用边界和正反例粗召回，再结合任务匹配、作用域、Tool 可用性、冲突和 Prompt 成本精排，只有最终选中的完整指令会进入模型上下文。可以在请求中写 `$skill.id` 或使用 `/skill use <id>` 显式启用，并通过 `/skill explain` 查看上一轮路由原因。Skill 只能收紧 Tool 范围，所有执行仍需经过原有安全检查。
+
+设置 `CORECODER_SKILLS=0` 可关闭路由；`CORECODER_SKILLS_DIR`、`CORECODER_SKILL_TOP_K`、`CORECODER_SKILL_MAX_ACTIVE` 和 `CORECODER_SKILL_PROMPT_CHARS` 分别控制用户目录和路由预算。
 
 ## 相关项目
 

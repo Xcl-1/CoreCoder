@@ -182,17 +182,28 @@ Inside the REPL, `/help` lists everything; these are the ones you'll reach for:
 /compact         compact the context by hand
 /tokens          token usage and cost estimate
 /diff            files changed this session
+/undo            undo tracked write/edit changes (`/undo force` overrides conflicts)
 /save  /sessions checkpoint / list all sessions
 /memory          inspect memories and pending reflections
 /memory show <id> / search <query> / archive <id> / approve <id> / reflect
+/skills          list built-in, user, and project skills
+/skill search <query> / show <id> / use <id> / unuse <id> / explain
 quit / exit      exit (Ctrl+C cancels the current round)
 ```
 
 Complete conversations are automatically checkpointed after every turn under `~/.corecoder/sessions`; `/save` creates an explicit checkpoint, `/sessions` lists every saved conversation, and `corecoder -r <id>` resumes one and displays its saved user/assistant history in interactive mode. Tool results stay hidden to keep the terminal readable. Session IDs are sanitized before becoming filenames.
 
+`/undo` restores the original bytes of files changed through `write_file`, `edit_file`, or `edit_ast` during the current CoreCoder process, and deletes files created by those tools. Multiple edits to one file still return to its first pre-edit state. If a file changed outside CoreCoder after the latest tracked write, normal undo leaves it untouched as a conflict; `/undo force` explicitly overrides that protection. Undo history survives `/reset`, but is not persisted across process restarts or resumed sessions. Arbitrary filesystem side effects from `bash` cannot be guaranteed and are outside the undo set.
+
 On exit, CoreCoder reflects on the replay, then extracts durable preferences, profiles, project conventions, feedback, verified procedures, and useful task episodes into Markdown files under `~/.corecoder/memory`. Active memories are retrieved again for every user turn, scoped to the current project where appropriate, and their use/success/failure statistics influence future ranking. Retrieval also searches original evidence, preserving recall when a Chinese request was summarized into English. Each completed turn writes a pending reflection checkpoint; a later startup recovers it if the previous process crashed. Pending entries expose their retry count and last extraction error in `/memory`, while repeated failures are quarantined after three attempts. Memories support versioning, evidence, candidate/active/archive/supersede states, an automatically rebuilt `MEMORY.md`, and a cross-process update lock. `/memory show <id>` inspects an entry, `/memory search <query>` searches, `/memory archive <id>` retires an entry, `/memory approve <id>` explicitly activates one, `/memory reflect` retries pending work, and `/memory forget <id>` permanently removes one. `CORECODER_MEMORY=0` disables learning, while `CORECODER_MEMORY_DIR` changes the location.
 
 Procedure memories require a real successful tool execution with exact verification evidence. If the general extraction pass misses a procedure or returns malformed output, an independent constrained pass can still preserve verified execution assets; pending recovery runs this structured pass first. Episode memories require an actual failed tool execution plus an evidence-backed failure or root-cause lesson, and both types remain project-scoped. Requests to run, analyze, or summarize a task are not treated as user/profile/project memory merely because they mention future reuse; verified reusable steps belong in procedure memory. Legacy entries with only this task-request evidence remain readable for audit but are excluded from retrieval. New execution-derived memories start as non-retrievable candidates; a matching validation from a second independent session promotes them to active, while `/memory approve <id>` allows explicit activation. Repeated replay noise is collapsed before reflection. Persistent `.corecoder/permissions.json` changes require explicit user confirmation instead of being silently used to bypass a blocked command. CoreCoder does not automatically generate or install executable Skills from memories; Skill promotion remains an explicit, reviewed operation.
+
+### Skills
+
+Skills are reusable task guidance layered above atomic tools. CoreCoder discovers built-ins from the package, user skills from `~/.corecoder/skills`, and project skills from `.corecoder/skills`; higher scopes override the same skill ID. Each package contains a small `skill.json` manifest and a full `SKILL.md`. Routing first recalls candidates from IDs, tags, intents, aliases, boundaries, and positive/negative examples, then ranks them by task fit, scope, tool availability, conflicts, and prompt cost. Only selected instructions enter the model context. Use `$skill.id` in a request or `/skill use <id>` to select one explicitly, and `/skill explain` to inspect the previous route. Skill tool restrictions can only remove tools and all execution still passes through the normal security guard.
+
+Set `CORECODER_SKILLS=0` to disable routing. `CORECODER_SKILLS_DIR`, `CORECODER_SKILL_TOP_K`, `CORECODER_SKILL_MAX_ACTIVE`, and `CORECODER_SKILL_PROMPT_CHARS` control the user directory and routing budgets.
 
 ## Related Projects
 

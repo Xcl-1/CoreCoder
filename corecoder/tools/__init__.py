@@ -7,6 +7,7 @@ from .edit_ast import EditASTTool
 from .glob_tool import GlobTool
 from .grep import GrepTool
 from .read import ReadFileTool
+from .undo import UndoChangesTool
 from .write import WriteFileTool
 
 ALL_TOOLS = [
@@ -17,6 +18,7 @@ ALL_TOOLS = [
     EditASTTool(),
     GlobTool(),
     GrepTool(),
+    UndoChangesTool(),
     AgentTool(),
 ]
 

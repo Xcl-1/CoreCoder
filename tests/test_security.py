@@ -103,6 +103,26 @@ def test_manager_match_none_for_unmatched():
     assert rule.action == "allow"
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo changed > source.py",
+        "git checkout -- source.py",
+        "git clean -fd",
+        "find . -delete",
+    ],
+)
+def test_manager_does_not_auto_allow_mutating_shell_commands(command):
+    decision = Guard().review("bash", {"command": command})
+    assert decision.allowed is False
+
+
+def test_manager_still_allows_read_only_git_commands():
+    for command in ("git status", "git diff", "git log -1", "git -C repo status"):
+        decision = Guard().review("bash", {"command": command})
+        assert decision.allowed is True
+
+
 def test_manager_add_user_rule(tmp_path, monkeypatch):
     permissions_file = tmp_path / "permissions.json"
     monkeypatch.setattr(
@@ -163,6 +183,24 @@ def test_manager_reload_clears_cache():
     pm._all_sorted = None
     rules_after = len(pm.list_rules())
     assert rules_after == rules_before + 1
+
+
+def test_manager_deduplicates_same_user_and_project_file(tmp_path, monkeypatch):
+    permissions_file = tmp_path / "permissions.json"
+    permissions_file.write_text(json.dumps([{
+        "tool_name": "bash",
+        "pattern": ".*",
+        "action": "deny",
+        "priority": 100,
+    }]))
+    monkeypatch.setattr("corecoder.security.permissions.USER_PERMISSIONS_PATH", permissions_file)
+    monkeypatch.setattr("corecoder.security.permissions.PROJECT_PERMISSIONS_PATH", permissions_file)
+
+    manager = PermissionManager()
+    matching = [rule for rule in manager.list_rules() if rule.priority == 100]
+
+    assert len(matching) == 1
+    assert matching[0].source == "user"
 
 
 # ============================================================================
@@ -413,7 +451,7 @@ def test_builtin_rules_coverage():
 
     # verify dangerous patterns produce deny rules
     deny_rules = [r for r in rules if r.action == "deny"]
-    assert len(deny_rules) == 10  # the 10 dangerous patterns
+    assert len(deny_rules) == 11  # destructive patterns plus shell control operators
 
 
 # ============================================================================
@@ -449,12 +487,14 @@ async def test_agent_with_guard_allows_safe_tool():
 
 
 @pytest.mark.asyncio
-async def test_agent_with_guard_sanitizes_output():
+async def test_agent_with_guard_sanitizes_output(tmp_path):
     """Guard should redact API keys from tool output."""
-    agent = Agent(llm=LLM.__new__(LLM), tools=[get_tool("bash")], replay=False,
+    secret_file = tmp_path / "secret.txt"
+    secret_file.write_text("sk-abc123def456ghi789jkl012mno345pqr678stu")
+    agent = Agent(llm=LLM.__new__(LLM), tools=[get_tool("read_file")], replay=False,
                   guard=Guard())
     result, _elapsed, _success = await agent._exec_tool(
-        type("TC", (), {"name": "bash", "id": "x", "arguments": {"command": "echo sk-abc123def456ghi789jkl012mno345pqr678stu"}})()
+        type("TC", (), {"name": "read_file", "id": "x", "arguments": {"file_path": str(secret_file)}})()
     )
     assert "OPENAI_KEY_REDACTED" in result
     assert "sk-abc" not in result

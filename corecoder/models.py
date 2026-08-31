@@ -22,7 +22,9 @@ class LLMResponse(BaseModel):
     """A complete LLM response — text, optional tool calls, and usage stats."""
 
     content: str = ""
+    reasoning_content: str = ""
     tool_calls: list[ToolCall] = Field(default_factory=list)
+    finish_reason: str | None = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
 
@@ -34,6 +36,10 @@ class LLMResponse(BaseModel):
         Pydantic skips properties during serialization by default.
         """
         msg: dict = {"role": "assistant", "content": self.content or None}
+        if self.reasoning_content:
+            # DeepSeek thinking-mode tool calls require the reasoning from the
+            # preceding assistant message to be sent back on the next request.
+            msg["reasoning_content"] = self.reasoning_content
         if self.tool_calls:
             msg["tool_calls"] = [
                 {
@@ -69,6 +75,7 @@ class StepRecord(BaseModel):
     estimated_input_tokens: int = 0
     llm_response: LLMResponse = Field(default_factory=LLMResponse)
     tool_executions: list[ToolExecRecord] = Field(default_factory=list)
+    skill_route: dict = Field(default_factory=dict)
     step_duration_ms: float = 0.0
 
 

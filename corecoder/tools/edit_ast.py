@@ -17,7 +17,7 @@ from pathlib import Path
 
 from ._utils import unified_diff
 from .base import Tool
-from .edit import _changed_files
+from .changes import current_change_tracker
 
 
 class EditASTTool(Tool):
@@ -100,8 +100,15 @@ class EditASTTool(Tool):
                     f"{e}\n\nTip: check indentation in new_text — it must match the original."
                 )
 
+            before = p.read_bytes()
+            original_mode = p.stat().st_mode
             p.write_text(new_content, encoding="utf-8")
-            _changed_files.add(str(p))
+            current_change_tracker().record(
+                p,
+                before=before,
+                after=p.read_bytes(),
+                original_mode=original_mode,
+            )
 
             diff = unified_diff(original, new_content, str(p))
             return f"Edited {file_path} via AST ({operation})\n{diff}"
@@ -254,4 +261,3 @@ def _reindent_lines(code_lines: list[str], base_indent: str) -> list[str]:
 def _get_indent(line: str) -> str:
     """Extract the leading whitespace from a line."""
     return line[: len(line) - len(line.lstrip())]
-

@@ -107,8 +107,15 @@ class PermissionManager:
         from .defaults import builtin_rules
 
         self._builtin_rules = builtin_rules()
-        self._project_rules = _load_json_rules(PROJECT_PERMISSIONS_PATH, "project")
         self._user_rules = _load_json_rules(USER_PERMISSIONS_PATH, "user")
+        try:
+            same_source = USER_PERMISSIONS_PATH.resolve() == PROJECT_PERMISSIONS_PATH.resolve()
+        except OSError:
+            same_source = False
+        self._project_rules = (
+            [] if same_source
+            else _load_json_rules(PROJECT_PERMISSIONS_PATH, "project")
+        )
         self._all_sorted = None  # invalidate cache
 
     def match(self, tool_name: str, arguments: dict) -> PermissionRule | None:

@@ -24,6 +24,11 @@ ENV_KEYS = [
     "CORECODER_MEMORY",
     "CORECODER_MEMORY_TOP_K",
     "CORECODER_MEMORY_DIR",
+    "CORECODER_SKILLS",
+    "CORECODER_SKILLS_DIR",
+    "CORECODER_SKILL_TOP_K",
+    "CORECODER_SKILL_MAX_ACTIVE",
+    "CORECODER_SKILL_PROMPT_CHARS",
     "OPENAI_BASE_URL",
     "CORECODER_BASE_URL",
 ]
@@ -107,6 +112,24 @@ def test_env_full_override(monkeypatch):
 def test_memory_enabled_parsing(monkeypatch, raw, expected):
     monkeypatch.setenv("CORECODER_MEMORY", raw)
     assert Config.from_env().memory_enabled is expected
+
+
+@pytest.mark.parametrize("raw,expected", [("1", True), ("true", True), ("0", False), ("no", False)])
+def test_skills_enabled_parsing(monkeypatch, raw, expected):
+    monkeypatch.setenv("CORECODER_SKILLS", raw)
+    assert Config.from_env().skills_enabled is expected
+
+
+def test_skill_configuration(monkeypatch, tmp_path):
+    monkeypatch.setenv("CORECODER_SKILLS_DIR", str(tmp_path / "skills"))
+    monkeypatch.setenv("CORECODER_SKILL_TOP_K", "7")
+    monkeypatch.setenv("CORECODER_SKILL_MAX_ACTIVE", "3")
+    monkeypatch.setenv("CORECODER_SKILL_PROMPT_CHARS", "9000")
+    config = Config.from_env()
+    assert config.skills_dir == tmp_path / "skills"
+    assert config.skill_top_k == 7
+    assert config.skill_max_active == 3
+    assert config.skill_prompt_chars == 9000
 
 
 # --- .env file in temporary directory ----------------------------------
@@ -203,6 +226,10 @@ def test_memory_dir_default_expands_home(monkeypatch):
         ("CORECODER_PROVIDER", "anthropic"),
         ("CORECODER_MEMORY", "maybe"),
         ("CORECODER_MEMORY_TOP_K", "99"),
+        ("CORECODER_SKILLS", "maybe"),
+        ("CORECODER_SKILL_TOP_K", "0"),
+        ("CORECODER_SKILL_MAX_ACTIVE", "8"),
+        ("CORECODER_SKILL_PROMPT_CHARS", "100"),
     ],
 )
 def test_invalid_env_raises(monkeypatch, key, raw):

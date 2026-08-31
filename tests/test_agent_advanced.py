@@ -5,6 +5,7 @@ import pytest
 
 from corecoder.agent import Agent, AgentRole, role_prompt, role_tools
 from corecoder.llm import LLM
+from corecoder.models import LLMResponse
 from corecoder.tools import ALL_TOOLS
 
 # --- Role system ---------------------------------------------------------
@@ -44,6 +45,36 @@ def test_executor_gets_all_tools():
     """Executor gets the full tool set."""
     tools = role_tools(AgentRole.EXECUTOR, ALL_TOOLS)
     assert len(tools) == len(ALL_TOOLS)
+
+
+@pytest.mark.asyncio
+async def test_empty_length_response_gets_one_tool_free_finalization_attempt():
+    class _SequenceLLM:
+        def __init__(self):
+            self.calls = []
+            self.responses = [
+                LLMResponse(
+                    content="",
+                    reasoning_content="unfinished reasoning",
+                    finish_reason="length",
+                    completion_tokens=8192,
+                ),
+                LLMResponse(content="final review", finish_reason="stop"),
+            ]
+
+        def chat(self, messages, tools=None, on_token=None):
+            self.calls.append({"messages": messages, "tools": tools})
+            return self.responses.pop(0)
+
+    llm = _SequenceLLM()
+    agent = Agent(llm=llm, tools=[], replay=False)
+
+    result = await agent.chat("review this")
+
+    assert result == "final review"
+    assert len(llm.calls) == 2
+    assert llm.calls[1]["tools"] is None
+    assert "Return the final answer now" in llm.calls[1]["messages"][-1]["content"]
 
 
 # --- Parallel execution --------------------------------------------------

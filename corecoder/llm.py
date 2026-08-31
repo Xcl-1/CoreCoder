@@ -105,9 +105,11 @@ class LLM:
             stream = self._call_with_retry(params)
 
         content_parts: list[str] = []
+        reasoning_parts: list[str] = []
         tc_map: dict[int, dict] = {}  # index -> {id, name, arguments_str}
         prompt_tok = 0
         completion_tok = 0
+        finish_reason: str | None = None
 
         for chunk in stream:
             # usage info comes in the final chunk
@@ -119,13 +121,24 @@ class LLM:
 
             if not chunk.choices:
                 continue
-            delta = chunk.choices[0].delta
+            choice = chunk.choices[0]
+            delta = choice.delta
+            chunk_finish_reason = getattr(choice, "finish_reason", None)
+            if chunk_finish_reason is not None:
+                finish_reason = chunk_finish_reason
 
             # accumulate text
             if delta.content:
                 content_parts.append(delta.content)
                 if on_token:
                     on_token(delta.content)
+
+            # DeepSeek thinking mode streams chain-of-thought separately from
+            # user-visible content. Preserve it for subsequent tool rounds but
+            # never stream it to the terminal.
+            reasoning_content = getattr(delta, "reasoning_content", None)
+            if reasoning_content:
+                reasoning_parts.append(reasoning_content)
 
             # accumulate tool calls across chunks
             if delta.tool_calls:
@@ -156,7 +169,9 @@ class LLM:
 
         return LLMResponse(
             content="".join(content_parts),
+            reasoning_content="".join(reasoning_parts),
             tool_calls=parsed,
+            finish_reason=finish_reason,
             prompt_tokens=prompt_tok,
             completion_tokens=completion_tok,
         )
@@ -237,9 +252,11 @@ class LiteLLM(LLM):
         stream = self._call_with_retry(params)
 
         content_parts: list[str] = []
+        reasoning_parts: list[str] = []
         tc_map: dict[int, dict] = {}
         prompt_tok = 0
         completion_tok = 0
+        finish_reason: str | None = None
 
         for chunk in stream:
             usage = getattr(chunk, "usage", None)
@@ -249,12 +266,20 @@ class LiteLLM(LLM):
 
             if not getattr(chunk, "choices", None):
                 continue
-            delta = chunk.choices[0].delta
+            choice = chunk.choices[0]
+            delta = choice.delta
+            chunk_finish_reason = getattr(choice, "finish_reason", None)
+            if chunk_finish_reason is not None:
+                finish_reason = chunk_finish_reason
 
             if getattr(delta, "content", None):
                 content_parts.append(delta.content)
                 if on_token:
                     on_token(delta.content)
+
+            reasoning_content = getattr(delta, "reasoning_content", None)
+            if reasoning_content:
+                reasoning_parts.append(reasoning_content)
 
             if getattr(delta, "tool_calls", None):
                 for tc_delta in delta.tool_calls:
@@ -283,7 +308,9 @@ class LiteLLM(LLM):
 
         return LLMResponse(
             content="".join(content_parts),
+            reasoning_content="".join(reasoning_parts),
             tool_calls=parsed,
+            finish_reason=finish_reason,
             prompt_tokens=prompt_tok,
             completion_tokens=completion_tok,
         )

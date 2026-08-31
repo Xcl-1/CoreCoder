@@ -28,6 +28,12 @@ _DANGEROUS_PATTERNS: list[tuple[str, str]] = [
     (r"\bwget\b.*\|\s*(sudo\s+)?(ba)?sh\b", "pipe wget to shell"),
 ]
 
+# Guard-only rules. These are intentionally separate from check_dangerous(),
+# which is also used by BashTool when no Guard is configured.
+_GUARD_ONLY_DENY_PATTERNS: list[tuple[str, str]] = [
+    (r"(?:\r|\n|>>?|[|;&])", "shell chaining or redirection"),
+]
+
 
 def check_dangerous(cmd: str) -> str | None:
     """Return a warning string if *cmd* looks destructive, else None.
@@ -46,19 +52,21 @@ def check_dangerous(cmd: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 _SAFE_SHELL_PATTERNS: list[str] = [
-    r"^(ls|dir)\b",
-    r"^(cat|head|tail|less|more)\b",
-    r"^(echo|printf)\b",
-    r"^(pwd|whoami|date|env|printenv)\b",
-    r"^(cd)\b",
-    r"^(git|hg|svn)\b",
-    r"^(python|python3|pip|pip3)\b.*(--version|-V|--help|-h)$",
-    r"^(pytest|nosetests|unittest)\b.*(--collect-only|--help|-h)$",
-    r"^(node|npm|npx|yarn|pnpm)\b.*(--version|-v|--help|-h)$",
-    r"^wc\b",
-    r"^find\b",
-    r"^df\b",
-    r"^du\b",
+    r"^(ls|dir)(?:\s+[^<>|;&]*)?$",
+    r"^(cat|head|tail|less|more)(?:\s+[^<>|;&]*)?$",
+    r"^(pwd|whoami|date|printenv)(?:\s+[^<>|;&]*)?$",
+    r"^env\s*$",
+    r"^cd(?:\s+[^<>|;&]*)?$",
+    (
+        r"^git(?:\s+-C\s+\S+)?\s+"
+        r"(?!.*(?:--output(?:=|\s)|--ext-diff|--textconv))"
+        r"(?:status|diff|log|show|rev-parse|ls-files)(?:\s+[^<>|;&]*)?$"
+    ),
+    r"^hg\s+(?:status|diff|log|cat|id)(?:\s+[^<>|;&]*)?$",
+    r"^svn\s+(?:status|diff|log|info|list|cat)(?:\s+[^<>|;&]*)?$",
+    r"^(python|python3|pip|pip3)\s+(--version|-V|--help|-h)\s*$",
+    r"^(node|npm|npx|yarn|pnpm)\s+(--version|-v|--help|-h)\s*$",
+    r"^(wc|df|du)(?:\s+[^<>|;&]*)?$",
 ]
 
 
@@ -74,7 +82,7 @@ def builtin_rules():
     rules: list[PermissionRule] = []
 
     # ---- dangerous shell commands — always deny ----
-    for pattern, reason in _DANGEROUS_PATTERNS:
+    for pattern, reason in _DANGEROUS_PATTERNS + _GUARD_ONLY_DENY_PATTERNS:
         rules.append(PermissionRule(
             tool_name="bash",
             pattern=pattern,
@@ -116,6 +124,16 @@ def builtin_rules():
             priority=-10,
             source="builtin",
         ))
+
+    # ---- undo — destructive restoration requires explicit confirmation ----
+    rules.append(PermissionRule(
+        tool_name="undo_changes",
+        pattern=r".*",
+        action="ask",
+        reason="undo restores or deletes files changed during this session",
+        priority=-10,
+        source="builtin",
+    ))
 
     # ---- agent tool — allow ----
     rules.append(PermissionRule(

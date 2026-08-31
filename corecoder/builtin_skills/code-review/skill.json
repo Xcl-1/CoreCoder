@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "id": "coding.code-review",
+  "name": "Code Review",
+  "version": "1.0.0",
+  "summary": "Review an existing change for correctness, regressions, security, and missing tests.",
+  "category": ["coding", "quality", "review"],
+  "tags": ["code review", "review", "审查", "代码审查", "regression"],
+  "aliases": ["review changes", "检查代码"],
+  "intents": ["review this code", "review these changes", "代码审查", "检查这次修改"],
+  "applies_when": ["The user asks to inspect existing code or a completed change."],
+  "not_when": ["implement feature", "实现功能"],
+  "examples": {
+    "positive": ["Review this pull request for correctness and regressions", "请审查这次代码修改并列出问题"],
+    "negative": ["Implement the feature described in this issue", "直接修改代码实现这个功能"]
+  },
+  "tools": {
+    "required": ["read_file", "grep"],
+    "recommended": ["glob"],
+    "forbidden": ["write_file", "edit_file", "edit_ast", "bash", "agent", "undo_changes"]
+  },
+  "exclusive_group": "review-mode",
+  "token_budget": 900,
+  "status": "active"
+}

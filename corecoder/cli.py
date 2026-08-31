@@ -22,6 +22,7 @@ from .llm import LLM, LiteLLM
 from .memory import MemoryEngine
 from .security import Guard, PermissionRule
 from .session import list_sessions, load_session, save_session
+from .skills import SkillManager
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -92,11 +93,13 @@ def main():
     guard = Guard(confirm_callback=_cli_confirm)
     _cli_confirm._guard = guard  # enable "always allow" via callback attribute
     memory = _create_memory_engine(config, llm)
+    skills = _create_skill_manager(config)
     agent = Agent(
         llm=llm,
         max_context_tokens=config.max_context_tokens,
         guard=guard,
         memory=memory,
+        skills=skills,
         session_id=args.resume,
     )
 
@@ -244,13 +247,16 @@ def _repl(agent: Agent, config: Config, show_history: bool = False):
                 console.print("[dim]Nothing to save yet.[/dim]")
             continue
         if user_input == "/diff":
-            from .tools.edit import _changed_files
-            if not _changed_files:
+            changed_files = agent.changes.changed_files
+            if not changed_files:
                 console.print("[dim]No files modified this session.[/dim]")
             else:
-                console.print(f"[bold]Files modified this session ({len(_changed_files)}):[/bold]")
-                for f in sorted(_changed_files):
+                console.print(f"[bold]Files modified this session ({len(changed_files)}):[/bold]")
+                for f in sorted(changed_files):
                     console.print(f"  [cyan]{f}[/cyan]")
+            continue
+        if user_input in ("/undo", "/undo force"):
+            _undo_changes(agent, force=user_input.endswith(" force"))
             continue
         if user_input == "/replay":
             if agent._replay:
@@ -298,6 +304,36 @@ def _repl(agent: Agent, config: Config, show_history: bool = False):
             continue
         if user_input == "/memory reflect":
             _reflect_pending(agent)
+            continue
+        if user_input == "/skills":
+            _show_skills(agent, config)
+            continue
+        if user_input.startswith("/skill search "):
+            _search_skills(agent, user_input[len("/skill search "):].strip())
+            continue
+        if user_input.startswith("/skill show "):
+            _show_skill(agent, user_input[len("/skill show "):].strip())
+            continue
+        if user_input.startswith("/skill use "):
+            _pin_skill(agent, user_input[len("/skill use "):].strip())
+            continue
+        if user_input.startswith("/skill unuse "):
+            _unpin_skill(agent, user_input[len("/skill unuse "):].strip())
+            continue
+        if user_input == "/skill clear":
+            if agent.skills:
+                agent.skills.clear_pins()
+            console.print("[green]Cleared pinned skills.[/green]")
+            continue
+        if user_input == "/skill reload":
+            if agent.skills:
+                agent.skills.reload()
+                console.print(f"[green]Reloaded {len(agent.skills.registry)} skills.[/green]")
+            else:
+                console.print("[yellow]Skills are disabled.[/yellow]")
+            continue
+        if user_input == "/skill explain":
+            _explain_skill_route(agent)
             continue
         if user_input == "/permissions":
             _show_permissions(agent)
@@ -520,6 +556,8 @@ def _show_help():
         "  /tokens        Show token usage\n"
         "  /compact       Compress conversation context\n"
         "  /diff          Show files modified this session\n"
+        "  /undo         Undo tracked file changes from this session\n"
+        "  /undo force   Undo even when files changed externally\n"
         "  /replay        Show replay log path\n"
         "  /plan <task>   Generate and execute a structured plan\n"
         "  /save          Save session to disk\n"
@@ -531,6 +569,14 @@ def _show_help():
         "  /memory archive <id> Archive one memory\n"
         "  /memory approve <id> Reactivate one memory\n"
         "  /memory reflect Process pending session reflections\n"
+        "  /skills        List discovered skills\n"
+        "  /skill search <q> Search active skills\n"
+        "  /skill show <id> Show a skill manifest\n"
+        "  /skill use <id> Pin a skill for this conversation\n"
+        "  /skill unuse <id> Unpin a skill\n"
+        "  /skill clear   Clear pinned skills\n"
+        "  /skill reload  Rescan skill directories\n"
+        "  /skill explain Explain the previous route\n"
         "  /permissions   List security rules\n"
         "  /permit <t> <p> Add an allow rule\n"
         "  /deny <t> <p> Add a deny rule\n"
@@ -558,6 +604,42 @@ def _create_memory_engine(config: Config, llm):
     if recovered:
         logger.info("Recovered memory from %s interrupted session(s)", recovered)
     return engine
+
+
+def _undo_changes(agent: Agent, *, force: bool = False) -> None:
+    if not len(agent.changes):
+        console.print("[dim]No tracked file changes to undo.[/dim]")
+        return
+    result = agent.changes.undo_all(force=force)
+    console.print(
+        f"[green]Undo complete:[/green] {len(result.restored)} restored, "
+        f"{len(result.deleted)} deleted, "
+        f"[yellow]{len(result.conflicts)} conflicts[/yellow], "
+        f"[red]{len(result.errors)} errors[/red]."
+    )
+    for path in result.conflicts:
+        console.print(f"  [yellow]Conflict, left unchanged: {path}[/yellow]")
+    for error in result.errors:
+        console.print(f"  [red]{error}[/red]")
+    if result.conflicts and not force:
+        console.print("[dim]Review conflicts, then use /undo force only if overwriting them is intended.[/dim]")
+
+
+def _create_skill_manager(config: Config) -> SkillManager | None:
+    if not config.skills_enabled:
+        return None
+    manager = SkillManager.create(
+        project_path=os.getcwd(),
+        user_dir=config.skills_dir,
+        top_k=config.skill_top_k,
+        max_active=config.skill_max_active,
+        max_prompt_chars=config.skill_prompt_chars,
+    )
+    for error in manager.registry.errors:
+        logger.warning("Skill discovery: %s", error)
+    for override in manager.registry.overrides:
+        logger.info("Skill override: %s", override)
+    return manager
 
 
 def _save_current_session(agent: Agent, config: Config) -> str | None:
@@ -676,6 +758,117 @@ def _reflect_pending(agent: Agent) -> None:
             f"[yellow]{item['session_id']}[/yellow] attempts={item['attempts']} "
             f"last_error={item['last_error']}"
         )
+
+
+# ---- skill helpers -----------------------------------------------------
+
+def _show_skills(agent: Agent, config: Config) -> None:
+    if agent.skills is None:
+        console.print("Skills: [yellow]disabled[/yellow]")
+        console.print(f"Directory: [dim]{config.skills_dir}[/dim]")
+        return
+    from rich.table import Table
+    skills = agent.skills.registry.all(include_inactive=True)
+    table = Table(title=f"Skills ({len(skills)})", border_style="blue")
+    table.add_column("ID", style="cyan")
+    table.add_column("Scope", width=9)
+    table.add_column("Status", width=10)
+    table.add_column("Version", width=9)
+    table.add_column("Summary")
+    for skill in skills:
+        manifest = skill.manifest
+        pinned = " *" if manifest.id in agent.skills.pinned else ""
+        table.add_row(
+            manifest.id + pinned,
+            skill.scope,
+            manifest.status,
+            manifest.version,
+            manifest.summary,
+        )
+    console.print(table)
+    if agent.skills.registry.errors:
+        console.print(f"[yellow]{len(agent.skills.registry.errors)} skill package(s) failed validation.[/yellow]")
+    if agent.skills.registry.overrides:
+        console.print(f"[dim]{len(agent.skills.registry.overrides)} scoped override(s) applied.[/dim]")
+
+
+def _show_skill(agent: Agent, skill_id: str) -> None:
+    if agent.skills is None:
+        console.print("[yellow]Skills are disabled.[/yellow]")
+        return
+    skill = agent.skills.registry.get(skill_id)
+    if skill is None:
+        console.print(f"[yellow]Skill not found: {skill_id}[/yellow]")
+        return
+    manifest = skill.manifest
+    details = (
+        f"# {manifest.name}\n\n{manifest.summary}\n\n"
+        f"- ID: `{manifest.id}`\n"
+        f"- Version: `{manifest.version}`\n"
+        f"- Scope: `{skill.scope}`\n"
+        f"- Status: `{manifest.status}`\n"
+        f"- Category: {', '.join(manifest.category) or '-'}\n"
+        f"- Tags: {', '.join(manifest.tags) or '-'}\n"
+        f"- Required tools: {', '.join(manifest.tools.required) or '-'}\n"
+        f"- Forbidden tools: {', '.join(manifest.tools.forbidden) or '-'}\n"
+        f"- Path: `{skill.path}`"
+    )
+    console.print(Panel(Markdown(details), border_style="blue"))
+
+
+def _search_skills(agent: Agent, query: str) -> None:
+    if agent.skills is None:
+        console.print("[yellow]Skills are disabled.[/yellow]")
+        return
+    if not query:
+        console.print("[yellow]Usage: /skill search <query>[/yellow]")
+        return
+    matches = agent.skills.search(query)
+    if not matches:
+        console.print("[dim]No matching active skills.[/dim]")
+        return
+    for match in matches:
+        console.print(
+            f"  [cyan]{match.skill.manifest.id}[/cyan] score={match.score:.4f} "
+            f"[{match.skill.scope}] {match.skill.manifest.summary}"
+        )
+
+
+def _pin_skill(agent: Agent, skill_id: str) -> None:
+    if agent.skills is None:
+        console.print("[yellow]Skills are disabled.[/yellow]")
+    elif agent.skills.pin(skill_id):
+        console.print(f"[green]Pinned skill: {skill_id}[/green]")
+    else:
+        console.print(f"[yellow]Active skill not found: {skill_id}[/yellow]")
+
+
+def _unpin_skill(agent: Agent, skill_id: str) -> None:
+    if agent.skills is not None and agent.skills.unpin(skill_id):
+        console.print(f"[green]Unpinned skill: {skill_id}[/green]")
+    else:
+        console.print(f"[yellow]Skill was not pinned: {skill_id}[/yellow]")
+
+
+def _explain_skill_route(agent: Agent) -> None:
+    if agent.skills is None:
+        console.print("[yellow]Skills are disabled.[/yellow]")
+        return
+    result = agent.skills.last_result
+    if result is None:
+        console.print("[dim]No skill route has run in this session.[/dim]")
+        return
+    console.print(f"[bold]Selected:[/bold] {', '.join(result.selected_ids) or '-'}")
+    console.print(f"[bold]Prompt characters:[/bold] {len(result.prompt)}")
+    for candidate in result.candidates:
+        state = "selected" if candidate.skill.manifest.id in result.selected_ids else "candidate"
+        reasons = "; ".join(candidate.reasons) or "metadata similarity"
+        console.print(
+            f"  [cyan]{candidate.skill.manifest.id}[/cyan] {candidate.score:.4f} "
+            f"[{state}] {reasons}"
+        )
+    for reason in result.rejected:
+        console.print(f"  [dim]rejected: {reason}[/dim]")
 
 
 # ---- security helpers --------------------------------------------------

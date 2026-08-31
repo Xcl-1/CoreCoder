@@ -11,9 +11,10 @@ from pathlib import Path
 from ..sandbox import is_write_blocked
 from ._utils import unified_diff
 from .base import Tool
+from .changes import current_change_tracker, default_change_tracker
 
 # track files changed this session for /diff
-_changed_files: set[str] = set()
+_changed_files = default_change_tracker().changed_files
 
 
 class EditFileTool(Tool):
@@ -68,9 +69,16 @@ class EditFileTool(Tool):
                     f"Include more surrounding lines to make it unique."
                 )
 
+            before = p.read_bytes()
+            original_mode = p.stat().st_mode
             new_content = content.replace(old_string, new_string, 1)
             p.write_text(new_content, encoding="utf-8")
-            _changed_files.add(str(p))
+            current_change_tracker().record(
+                p,
+                before=before,
+                after=p.read_bytes(),
+                original_mode=original_mode,
+            )
 
             # generate a unified diff so the user/LLM can see exactly what changed
             diff = unified_diff(content, new_content, str(p))

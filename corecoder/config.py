@@ -11,6 +11,12 @@ def resolve_memory_dir(value: str | Path | None = None) -> Path:
     return Path(raw).expanduser().resolve()
 
 
+def resolve_skill_dir(value: str | Path | None = None) -> Path:
+    """Resolve the user-level skill directory without creating it."""
+    raw = value if value is not None else (os.getenv("CORECODER_SKILLS_DIR") or "~/.corecoder/skills")
+    return Path(raw).expanduser().resolve()
+
+
 def _load_dotenv():
     """Load .env from cwd, walking up to home dir. No-op if python-dotenv missing."""
     try:
@@ -43,6 +49,11 @@ class Config:
     memory_enabled: bool = True
     memory_dir: Path = Path.home() / ".corecoder" / "memory"
     memory_top_k: int = 5
+    skills_enabled: bool = True
+    skills_dir: Path = Path.home() / ".corecoder" / "skills"
+    skill_top_k: int = 10
+    skill_max_active: int = 2
+    skill_prompt_chars: int = 6_000
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -61,6 +72,10 @@ class Config:
         provider = os.getenv("CORECODER_PROVIDER", "openai")
         memory_raw = os.getenv("CORECODER_MEMORY", "1").strip().lower()
         memory_top_k_raw = os.getenv("CORECODER_MEMORY_TOP_K", "5")
+        skills_raw = os.getenv("CORECODER_SKILLS", "1").strip().lower()
+        skill_top_k_raw = os.getenv("CORECODER_SKILL_TOP_K", "10")
+        skill_max_active_raw = os.getenv("CORECODER_SKILL_MAX_ACTIVE", "2")
+        skill_prompt_chars_raw = os.getenv("CORECODER_SKILL_PROMPT_CHARS", "6000")
 
         # --- validation --------------------------------------------------
         try:
@@ -115,6 +130,27 @@ class Config:
             raise ValueError(
                 f"CORECODER_MEMORY_TOP_K must be 1-20, got: {memory_top_k}"
             )
+        if skills_raw not in ("1", "true", "yes", "0", "false", "no"):
+            raise ValueError(
+                f"CORECODER_SKILLS must be a boolean, got: {skills_raw!r}"
+            )
+        try:
+            skill_top_k = int(skill_top_k_raw)
+            skill_max_active = int(skill_max_active_raw)
+            skill_prompt_chars = int(skill_prompt_chars_raw)
+        except ValueError as exc:
+            raise ValueError("Skill limits must be integers") from exc
+        if not (1 <= skill_top_k <= 50):
+            raise ValueError(f"CORECODER_SKILL_TOP_K must be 1-50, got: {skill_top_k}")
+        if not (1 <= skill_max_active <= 5):
+            raise ValueError(
+                f"CORECODER_SKILL_MAX_ACTIVE must be 1-5, got: {skill_max_active}"
+            )
+        if not (1000 <= skill_prompt_chars <= 50000):
+            raise ValueError(
+                "CORECODER_SKILL_PROMPT_CHARS must be 1000-50000, "
+                f"got: {skill_prompt_chars}"
+            )
 
         return cls(
             model=os.getenv("CORECODER_MODEL", "gpt-5.5"),
@@ -127,4 +163,9 @@ class Config:
             memory_enabled=memory_raw in ("1", "true", "yes"),
             memory_dir=resolve_memory_dir(),
             memory_top_k=memory_top_k,
+            skills_enabled=skills_raw in ("1", "true", "yes"),
+            skills_dir=resolve_skill_dir(),
+            skill_top_k=skill_top_k,
+            skill_max_active=skill_max_active,
+            skill_prompt_chars=skill_prompt_chars,
         )

@@ -34,10 +34,12 @@ from .replay import ReplayLogger
 from .tools import ALL_TOOLS
 from .tools.agent import AgentTool
 from .tools.base import Tool
+from .tools.changes import ChangeTracker, bind_change_tracker, reset_change_tracker
 
 if TYPE_CHECKING:
     from .memory import MemoryEngine
     from .security import Guard
+    from .skills import SkillManager
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +103,8 @@ class Agent:
         replay: bool = True,
         guard: Guard | None = None,
         memory: MemoryEngine | None = None,
+        skills: SkillManager | None = None,
+        changes: ChangeTracker | None = None,
         session_id: str | None = None,
     ):
         self.llm = llm
@@ -116,6 +120,10 @@ class Agent:
         self._memory_prompt = ""
         self._memory_context_loaded = False
         self._memory_finalized = False
+        self.skills = skills
+        self._skill_prompt = ""
+        self._skill_forbidden_tools: set[str] = set()
+        self.changes = changes or ChangeTracker()
         self.session_id = session_id or self._new_session_id()
 
         # replay log — on by default in production, off in tests
@@ -132,15 +140,18 @@ class Agent:
         system = self._system
         if self._memory_prompt:
             system = f"{system}\n\n{self._memory_prompt}"
+        if self._skill_prompt:
+            system = f"{system}\n\n{self._skill_prompt}"
         return [{"role": "system", "content": system}] + self.messages
 
     def _tool_schemas(self) -> list[dict]:
-        return [t.schema() for t in self.tools]
+        return [t.schema() for t in self.tools if t.name not in self._skill_forbidden_tools]
 
     async def chat(self, user_input: str,
                    on_token: Callable[[str], None] | None = None,
                    on_tool: Callable[[str, dict[str, Any]], None] | None = None) -> str:
         """Process one user message. May involve multiple LLM/tool rounds."""
+        self._load_skill_context(user_input)
         self._load_memory_context(user_input)
         self.messages.append({"role": "user", "content": user_input})
         await asyncio.to_thread(self.context.maybe_compress, self.messages, self.llm)
@@ -160,6 +171,52 @@ class Agent:
 
             # no tool calls -> LLM is done, log the final step and return
             if not resp.tool_calls:
+                if not resp.content.strip():
+                    # Thinking models can exhaust their output budget in
+                    # reasoning_content before emitting a user-visible answer.
+                    # Make one tool-free attempt to turn the gathered evidence
+                    # into a concise final response instead of silently
+                    # returning an empty string.
+                    self._log_step(self._step_number, len(full_msgs), est_tokens,
+                                   resp, [], step_start)
+                    recovery_messages = full_msgs + [{
+                        "role": "user",
+                        "content": (
+                            "Return the final answer now using the evidence already gathered. "
+                            "Do not call tools, do not continue analysis, and be concise."
+                        ),
+                    }]
+                    self._step_number += 1
+                    recovery_start = time.monotonic()
+                    recovery = await asyncio.to_thread(
+                        self.llm.chat,
+                        messages=recovery_messages,
+                        tools=None,
+                        on_token=on_token,
+                    )
+                    if recovery.tool_calls:
+                        # No tools were offered for finalization. Never persist
+                        # hallucinated calls without matching tool replies.
+                        recovery = recovery.model_copy(update={"tool_calls": []})
+                    if not recovery.content.strip():
+                        reason = recovery.finish_reason or resp.finish_reason or "unknown"
+                        recovery = recovery.model_copy(update={
+                            "content": (
+                                "Error: the model produced no final answer "
+                                f"(finish_reason={reason}). Try a smaller task or a larger output limit."
+                            ),
+                            "reasoning_content": "",
+                        })
+                    self.messages.append(recovery.message)
+                    self._log_step(
+                        self._step_number,
+                        len(recovery_messages),
+                        estimate_tokens(recovery_messages),
+                        recovery,
+                        [],
+                        recovery_start,
+                    )
+                    return recovery.content
                 self.messages.append(resp.message)
                 self._log_step(self._step_number, len(full_msgs), est_tokens,
                                resp, [], step_start)
@@ -197,6 +254,8 @@ class Agent:
         if tool is None:
             logger.warning("Unknown tool requested: %s", tc.name)
             return f"Error: unknown tool '{tc.name}'", 0, False
+        if tc.name in self._skill_forbidden_tools:
+            return f"Error: active skill policy forbids tool '{tc.name}'", 0, False
         # validate arguments first so a TypeError raised *inside* the tool isn't
         # mislabelled as a bad-arguments error from the caller
         try:
@@ -212,6 +271,7 @@ class Agent:
                 return f"[Security] Blocked: {decision.reason}", 0, False
 
         t0 = time.monotonic()
+        tracker_token = bind_change_tracker(self.changes)
         try:
             result = await tool.execute(**tc.arguments)
             # ---- output sanitisation ----
@@ -226,6 +286,8 @@ class Agent:
             elapsed = (time.monotonic() - t0) * 1000
             logger.exception("Tool %s raised exception", tc.name)
             return f"Error executing {tc.name}: {e}", elapsed, False
+        finally:
+            reset_change_tracker(tracker_token)
 
     async def _exec_tools_async(self, tool_calls: list[Any],
                                  on_tool: Callable[[str, dict[str, Any]], None] | None = None
@@ -325,6 +387,10 @@ class Agent:
         self._memory_prompt = ""
         self._memory_context_loaded = False
         self._memory_finalized = False
+        self._skill_prompt = ""
+        self._skill_forbidden_tools.clear()
+        if self.skills is not None:
+            self.skills.clear_pins()
         self.session_id = self._new_session_id()
         if self._replay:
             self._replay.close()
@@ -359,6 +425,19 @@ class Agent:
             logger.warning("Failed to retrieve cross-session memory", exc_info=True)
             self._memory_prompt = ""
 
+    def _load_skill_context(self, user_input: str) -> None:
+        """Route and activate skills for exactly one user turn."""
+        self._skill_prompt = ""
+        self._skill_forbidden_tools.clear()
+        if self.skills is None:
+            return
+        try:
+            result = self.skills.route(user_input, {tool.name for tool in self.tools})
+            self._skill_prompt = result.prompt
+            self._skill_forbidden_tools = result.forbidden_tools
+        except Exception:
+            logger.warning("Failed to route task skills", exc_info=True)
+
     def checkpoint_memory(self) -> None:
         """Queue the latest exchange so an interrupted process can learn later."""
         if self.memory is None or not hasattr(self.memory, "checkpoint"):
@@ -392,9 +471,7 @@ class Agent:
         This is the foundation of multi-agent delegation — the parent agent
         can spawn N specialised children for different parts of a task.
         """
-        tools = role_tools(role, self.tools)
-        # remove agent tool to prevent infinite recursion
-        tools = [t for t in tools if t.name != "agent"]
+        tools = self._tools_for_role(role)
 
         sub = Agent(
             llm=self.llm,
@@ -403,6 +480,7 @@ class Agent:
             max_rounds=min(self.max_rounds, 15),
             replay=False,  # sub-agents don't write their own replay logs
             guard=self.guard,  # inherit parent's security policy
+            changes=self.changes,  # sub-agent edits belong to the parent session
         )
 
         # inject role-specific prompt as the system message
@@ -427,6 +505,13 @@ class Agent:
         finally:
             sub.close()
 
+    def _tools_for_role(self, role: AgentRole) -> list[Tool]:
+        """Return role tools after applying the active parent skill policy."""
+        return [
+            tool for tool in role_tools(role, self.tools)
+            if tool.name != "agent" and tool.name not in self._skill_forbidden_tools
+        ]
+
     async def _review(self, executor_result: str, task: str) -> str:
         """Run a lightweight reviewer pass on executor output."""
         review_prompt = (
@@ -434,8 +519,7 @@ class Agent:
             f"Executor output:\n{executor_result[:3000]}\n\n"
             f"Review the above. Report PASS or list specific issues."
         )
-        tools = role_tools(AgentRole.REVIEWER, self.tools)
-        tools = [t for t in tools if t.name != "agent"]
+        tools = self._tools_for_role(AgentRole.REVIEWER)
 
         reviewer = Agent(
             llm=self.llm,
@@ -520,12 +604,29 @@ Plan (JSON only):"""
             ))
 
         step_duration = (time.monotonic() - step_start) * 1000
+        skill_route: dict[str, Any] = {}
+        if self.skills is not None and self.skills.last_result is not None:
+            routed = self.skills.last_result
+            skill_route = {
+                "selected": routed.selected_ids,
+                "candidates": [
+                    {
+                        "id": item.skill.manifest.id,
+                        "score": item.score,
+                        "reasons": item.reasons,
+                    }
+                    for item in routed.candidates
+                ],
+                "rejected": routed.rejected,
+                "prompt_chars": len(routed.prompt),
+            }
         record = StepRecord(
             step=step,
             messages_count=msg_count,
             estimated_input_tokens=est_tokens,
             llm_response=resp,
             tool_executions=execs,
+            skill_route=skill_route,
             step_duration_ms=round(step_duration, 2),
         )
         self._replay.log(record)

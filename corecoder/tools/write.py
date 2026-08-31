@@ -4,7 +4,7 @@ from pathlib import Path
 
 from ..sandbox import is_write_blocked
 from .base import Tool
-from .edit import _changed_files
+from .changes import current_change_tracker, missing_parent_dirs
 
 
 class WriteFileTool(Tool):
@@ -33,9 +33,18 @@ class WriteFileTool(Tool):
             if is_write_blocked(file_path):
                 return f"Error: writing to {file_path} is blocked by sandbox policy"
             p = Path(file_path).expanduser().resolve()
+            before = p.read_bytes() if p.is_file() else None
+            original_mode = p.stat().st_mode if p.is_file() else None
+            created_dirs = missing_parent_dirs(p)
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(content, encoding="utf-8")
-            _changed_files.add(str(p))
+            current_change_tracker().record(
+                p,
+                before=before,
+                after=p.read_bytes(),
+                original_mode=original_mode,
+                created_dirs=created_dirs,
+            )
             n_lines = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
             return f"Wrote {n_lines} lines to {file_path}"
         except Exception as e:

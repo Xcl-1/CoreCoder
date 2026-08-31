@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import math
-import re
 from dataclasses import dataclass
 from pathlib import Path
+
+from corecoder.retrieval import tokenize
 
 from .extractor import MemoryExtractor
 from .models import Memory
 
-_LATIN_RE = re.compile(r"[a-z0-9_.+#-]+", re.IGNORECASE)
-_CJK_RE = re.compile(r"[\u3400-\u9fff]+")
 _TYPE_WEIGHT = {
     "feedback": 1.2,
     "profile": 1.15,
@@ -21,16 +20,6 @@ _TYPE_WEIGHT = {
     "episode": 0.95,
     "reference": 0.9,
 }
-
-
-def tokenize(text: str) -> set[str]:
-    normalized = text.lower()
-    tokens = set(_LATIN_RE.findall(normalized))
-    for chunk in _CJK_RE.findall(normalized):
-        tokens.add(chunk)
-        if len(chunk) > 1:
-            tokens.update(chunk[i : i + 2] for i in range(len(chunk) - 1))
-    return {token for token in tokens if token and len(token) > 1}
 
 
 @dataclass(frozen=True)
