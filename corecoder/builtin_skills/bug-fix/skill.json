@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "id": "coding.bug-fix",
+  "name": "Bug Diagnosis and Fix",
+  "version": "1.0.0",
+  "summary": "Reproduce, diagnose, and minimally fix incorrect application behavior or runtime failures.",
+  "category": ["coding", "debugging", "maintenance"],
+  "tags": ["bug", "debug", "crash", "exception", "缺陷", "报错", "故障"],
+  "aliases": ["fix bug", "问题排查", "修复故障"],
+  "intents": ["find and fix this bug", "diagnose this crash", "修复这个问题", "定位故障原因"],
+  "applies_when": ["Existing behavior is incorrect, crashes, or violates its intended contract."],
+  "not_when": ["pytest", "test failure", "implement a new feature", "review only", "测试失败", "新增功能", "仅审查"],
+  "examples": {
+    "positive": ["This command crashes on empty input; find the cause and fix it", "空输入时程序崩溃，请定位并修复"],
+    "negative": ["Add a new command to the application", "pytest 失败了，修复测试"]
+  },
+  "tools": {
+    "required": ["read_file", "grep"],
+    "recommended": ["glob", "bash", "edit_file", "edit_ast"],
+    "forbidden": []
+  },
+  "conflicts_with": ["python.test-debug"],
+  "exclusive_group": "implementation-mode",
+  "token_budget": 1000,
+  "status": "active"
+}

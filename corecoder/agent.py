@@ -43,6 +43,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_FINALIZATION_EVIDENCE_CHARS = 24_000
+_FINALIZATION_SYSTEM_PROMPT = (
+    "You are a final-answer formatter, not an investigator. Use only the supplied "
+    "user request and tool evidence. Do not inspect further, search for additional "
+    "findings, compare more alternatives, or continue open-ended analysis. Treat any "
+    "requested count as a maximum, not a quota. If the evidence is insufficient, say "
+    "so. Obey the requested output format and length. Never reveal chain-of-thought."
+)
+
 
 # ---- role system --------------------------------------------------------
 
@@ -147,6 +156,56 @@ class Agent:
     def _tool_schemas(self) -> list[dict]:
         return [t.schema() for t in self.tools if t.name not in self._skill_forbidden_tools]
 
+    @staticmethod
+    def _finalization_messages(full_msgs: list[dict]) -> list[dict]:
+        """Build a compact, tool-free transcript for an empty-answer retry.
+
+        Thinking-model reasoning and the normal system/skill prompt are deliberately
+        omitted: the retry should format evidence already gathered, not restart the
+        task or continue an open-ended review.
+        """
+        last_user_index = next(
+            (
+                index
+                for index in range(len(full_msgs) - 1, -1, -1)
+                if full_msgs[index].get("role") == "user"
+            ),
+            0,
+        )
+        current_turn = full_msgs[last_user_index:]
+        user_request = next(
+            (
+                str(message.get("content") or "")
+                for message in current_turn
+                if message.get("role") == "user"
+            ),
+            "",
+        )
+        evidence_blocks = [
+            str(message.get("content"))
+            for message in current_turn
+            if message.get("role") in {"tool", "assistant"}
+            and message.get("content")
+        ]
+        evidence = "\n\n".join(evidence_blocks)
+        if len(evidence) > _FINALIZATION_EVIDENCE_CHARS:
+            half = (_FINALIZATION_EVIDENCE_CHARS - 64) // 2
+            evidence = (
+                evidence[:half].rstrip()
+                + "\n\n[tool evidence truncated for finalization]\n\n"
+                + evidence[-half:].lstrip()
+            )
+        prompt = (
+            f"Original user request:\n{user_request}\n\n"
+            f"Tool evidence already gathered:\n{evidence or '[none]'}\n\n"
+            "Return the final answer now. Do not call tools and do not perform "
+            "additional investigation or analysis."
+        )
+        return [
+            {"role": "system", "content": _FINALIZATION_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ]
+
     async def chat(self, user_input: str,
                    on_token: Callable[[str], None] | None = None,
                    on_tool: Callable[[str, dict[str, Any]], None] | None = None) -> str:
@@ -179,13 +238,7 @@ class Agent:
                     # returning an empty string.
                     self._log_step(self._step_number, len(full_msgs), est_tokens,
                                    resp, [], step_start)
-                    recovery_messages = full_msgs + [{
-                        "role": "user",
-                        "content": (
-                            "Return the final answer now using the evidence already gathered. "
-                            "Do not call tools, do not continue analysis, and be concise."
-                        ),
-                    }]
+                    recovery_messages = self._finalization_messages(full_msgs)
                     self._step_number += 1
                     recovery_start = time.monotonic()
                     recovery = await asyncio.to_thread(

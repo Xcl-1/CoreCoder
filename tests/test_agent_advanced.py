@@ -74,7 +74,50 @@ async def test_empty_length_response_gets_one_tool_free_finalization_attempt():
     assert result == "final review"
     assert len(llm.calls) == 2
     assert llm.calls[1]["tools"] is None
+    assert len(llm.calls[1]["messages"]) == 2
+    assert "final-answer formatter" in llm.calls[1]["messages"][0]["content"]
     assert "Return the final answer now" in llm.calls[1]["messages"][-1]["content"]
+
+
+def test_finalization_messages_keep_current_evidence_without_reasoning_or_skill_prompt():
+    messages = [
+        {"role": "system", "content": "base prompt and injected skill"},
+        {"role": "user", "content": "old request"},
+        {"role": "assistant", "content": "old answer"},
+        {"role": "user", "content": "review only router.py"},
+        {
+            "role": "assistant",
+            "content": None,
+            "reasoning_content": "open-ended hidden reasoning",
+            "tool_calls": [{"id": "call-1"}],
+        },
+        {"role": "tool", "tool_call_id": "call-1", "content": "router evidence"},
+    ]
+
+    recovery = Agent._finalization_messages(messages)
+
+    assert len(recovery) == 2
+    assert recovery[0]["role"] == "system"
+    assert "base prompt" not in recovery[0]["content"]
+    assert "injected skill" not in str(recovery)
+    assert "old request" not in str(recovery)
+    assert "open-ended hidden reasoning" not in str(recovery)
+    assert "review only router.py" in recovery[1]["content"]
+    assert "router evidence" in recovery[1]["content"]
+
+
+def test_finalization_messages_bound_large_tool_evidence():
+    messages = [
+        {"role": "system", "content": "base"},
+        {"role": "user", "content": "summarize evidence"},
+        {"role": "tool", "tool_call_id": "call-1", "content": "A" * 30_000},
+    ]
+
+    recovery = Agent._finalization_messages(messages)
+
+    prompt = recovery[1]["content"]
+    assert "tool evidence truncated for finalization" in prompt
+    assert len(prompt) < 25_000
 
 
 # --- Parallel execution --------------------------------------------------

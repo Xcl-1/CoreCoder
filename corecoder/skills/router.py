@@ -16,6 +16,7 @@ _EXPLICIT_RE = re.compile(
 )
 _WINDOWS_PATH_RE = re.compile(r"[a-z]:[\\/][^\s\"'`，。；;,]+", re.IGNORECASE)
 _SCOPE_BONUS = {"builtin": 0.0, "user": 0.03, "project": 0.06, "custom": 0.02}
+_RELATIVE_SELECTION_RATIO = 0.45
 _DELIMITED_PATH_RE = re.compile(
     r"(?<![^\s\"'`])[^\\/\s\"'`，。；;,]+"
     r"(?:[\\/][^\\/\s\"'`，。；;,]+)+"
@@ -192,12 +193,15 @@ class SkillRouter:
         rejected: list[str],
     ) -> list[SkillCandidate]:
         selected: list[SkillCandidate] = []
+        best_eligible_automatic_score: float | None = None
         selected_ids: set[str] = set()
         exclusive_groups: set[str] = set()
         required_tools: set[str] = set()
         forbidden_tools: set[str] = set()
         for candidate in candidates:
             manifest = candidate.skill.manifest
+            # Avoid injecting a weak second skill merely because it crossed the
+            # absolute threshold. Explicitly requested skills remain exempt.
             if not candidate.explicit and candidate.score < self.min_score:
                 continue
             if len(selected) >= self.max_active:
@@ -222,6 +226,11 @@ class SkillRouter:
                 names = ", ".join(sorted(policy_conflicts))
                 rejected.append(f"{manifest.id}: tool policy conflicts with selected skills ({names})")
                 continue
+            if not candidate.explicit:
+                if best_eligible_automatic_score is None:
+                    best_eligible_automatic_score = candidate.score
+                elif candidate.score < best_eligible_automatic_score * _RELATIVE_SELECTION_RATIO:
+                    continue
             selected.append(candidate)
             selected_ids.add(manifest.id)
             required_tools.update(candidate_required)

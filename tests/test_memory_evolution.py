@@ -108,6 +108,51 @@ def test_reflector_uses_replay_and_validates_evidence(tmp_path):
     assert reflection.failed_tools == 0
 
 
+def test_reflector_retries_length_response_with_fresh_bounded_json_request(tmp_path):
+    class _CaptureLLM:
+        def __init__(self):
+            self.calls = []
+            self.responses = [
+                LLMResponse(
+                    content="",
+                    reasoning_content="unfinished reflection reasoning",
+                    finish_reason="length",
+                ),
+                LLMResponse(content=json.dumps({
+                    "task_summary": "Review execution",
+                    "outcome": "unknown",
+                    "summary": "Verification was insufficient.",
+                    "failures": [],
+                    "root_causes": [],
+                    "effective_actions": [],
+                    "verification": [],
+                    "reusable_lessons": [],
+                    "evidence": [],
+                })),
+            ]
+
+        def chat(self, **kwargs):
+            self.calls.append(kwargs)
+            return self.responses.pop(0)
+
+    llm = _CaptureLLM()
+    messages = [
+        {"role": "user", "content": "X" * 20_000},
+        {"role": "assistant", "content": "No verified final result."},
+    ]
+
+    reflection = MemoryReflector(llm).reflect(messages)
+
+    assert reflection is not None
+    assert reflection.outcome == "unknown"
+    assert len(llm.calls) == 2
+    repair = llm.calls[1]["messages"]
+    assert len(repair) == 2
+    assert "JSON formatter" in repair[0]["content"]
+    assert "unfinished reflection reasoning" not in str(repair)
+    assert len(repair[1]["content"]) < 9_000
+
+
 def test_reflection_redacts_json_and_plaintext_credentials():
     text = 'api_key": "sk-abcdefghijklmnop password=hunter2 access_token: abcdef'
 

@@ -19,3 +19,10 @@ Review existing code or changes and report evidence-backed findings. Do not modi
 # Validation
 
 Every finding must include evidence, impact, and a practical remediation direction.
+
+# Stopping
+
+- Treat a requested finding count as a maximum, never a quota to fill.
+- Stop after inspecting the requested scope and verifying concrete suspicions already found.
+- Do not inspect adjacent modules solely to search for more findings.
+- If no material issue is confirmed, say so immediately and name only the remaining verification gap.

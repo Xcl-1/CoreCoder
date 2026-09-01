@@ -16,6 +16,13 @@ if TYPE_CHECKING:
     from ..llm import LLM
 
 logger = logging.getLogger(__name__)
+_REFLECTION_REPAIR_SOURCE_CHARS = 8_000
+_REFLECTION_SCHEMA = (
+    '{"task_summary":"...","outcome":"success|partial|failure|unknown",'
+    '"summary":"...","failures":["..."],"root_causes":["..."],'
+    '"effective_actions":["..."],"verification":["..."],'
+    '"reusable_lessons":["..."],"evidence":["exact source quote"]}'
+)
 _SECRET_RE = re.compile(
     r"(?:api[_ -]?key|password|access[_ -]?token|secret)[\"']?\s*[:=]\s*[\"']?\S+|\bsk-[A-Za-z0-9_-]{12,}",
     re.IGNORECASE,
@@ -50,7 +57,7 @@ Determine the actual outcome from verification evidence, not from confident lang
 Treat repeated shell syntax mistakes, platform mismatches, blocked probes, and abandoned commands as execution noise unless the source proves a reusable root cause and a verified remedy. Do not turn a simple acknowledgement or a request to remember a preference into an execution lesson. Never claim a root cause from one failed command alone.
 
 Return ONLY one JSON object with this schema:
-{{"task_summary":"...","outcome":"success|partial|failure|unknown","summary":"...","failures":["..."],"root_causes":["..."],"effective_actions":["..."],"verification":["..."],"reusable_lessons":["..."],"evidence":["exact source quote"]}}
+{_REFLECTION_SCHEMA}
 
 Deterministic execution facts:
 {json.dumps(execution_stats)}
@@ -59,7 +66,13 @@ Execution source:
 {source}
 """
         request = [
-            {"role": "system", "content": "You are a conservative execution reviewer."},
+            {
+                "role": "system",
+                "content": (
+                    "You are a conservative structured-data extractor. Return the JSON "
+                    "object immediately without prose, markdown, or open-ended deliberation."
+                ),
+            },
             {"role": "user", "content": prompt},
         ]
         raw_output = ""
@@ -72,13 +85,29 @@ Execution source:
                 return validated.model_copy(update=execution_stats)
             except (json.JSONDecodeError, ValidationError, AttributeError, TypeError, ValueError) as exc:
                 if attempt == 0:
-                    request.extend([
-                        {"role": "assistant", "content": str(raw_output)[:5_000]},
+                    # Start a fresh, smaller formatter request. Carrying the full
+                    # failed response and original review prompt encourages thinking
+                    # models to resume their unfinished analysis and hit length again.
+                    repair_source = source[-_REFLECTION_REPAIR_SOURCE_CHARS:]
+                    request = [
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are a JSON formatter, not an execution analyst. "
+                                "Return exactly one valid JSON object immediately. Do not "
+                                "explain, reconsider, or emit markdown. Use outcome unknown "
+                                "and empty arrays whenever the evidence is insufficient."
+                            ),
+                        },
                         {
                             "role": "user",
-                            "content": "Return only one valid JSON object using the exact schema.",
+                            "content": (
+                                f"Required schema:\n{_REFLECTION_SCHEMA}\n\n"
+                                f"Deterministic execution facts:\n{json.dumps(execution_stats)}\n\n"
+                                f"Bounded execution source:\n{repair_source}"
+                            ),
                         },
-                    ])
+                    ]
                     continue
                 logger.warning("Execution reflection failed after one repair attempt: %s", exc)
             except Exception as exc:  # noqa: BLE001 - provider exceptions vary

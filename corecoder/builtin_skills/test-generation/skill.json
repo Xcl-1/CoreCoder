@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "id": "testing.test-generation",
+  "name": "Test Generation",
+  "version": "1.0.0",
+  "summary": "Add focused automated tests for existing or newly requested behavior and meaningful edge cases.",
+  "category": ["coding", "testing", "quality"],
+  "tags": ["tests", "unit tests", "coverage", "测试生成", "补充测试", "覆盖率"],
+  "aliases": ["write tests", "add tests", "编写测试"],
+  "intents": ["add unit tests", "increase test coverage", "为这个模块补充测试", "编写测试用例"],
+  "applies_when": ["The user asks to create or expand automated tests."],
+  "not_when": ["existing tests are failing", "debug pytest", "已有测试失败", "排查测试报错"],
+  "examples": {
+    "positive": ["Add unit tests for the parser edge cases", "为解析器的边界情况补充单元测试"],
+    "negative": ["pytest is failing after the last change", "修复当前失败的测试"]
+  },
+  "tools": {
+    "required": ["read_file", "grep"],
+    "recommended": ["glob", "write_file", "edit_file", "bash"],
+    "forbidden": []
+  },
+  "exclusive_group": "python-test-workflow",
+  "token_budget": 900,
+  "status": "active"
+}

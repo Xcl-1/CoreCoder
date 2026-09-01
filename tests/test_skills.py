@@ -8,7 +8,7 @@ import pytest
 
 from corecoder.agent import Agent, AgentRole
 from corecoder.models import LLMResponse
-from corecoder.skills import SkillManager, SkillRegistry, SkillRouter, SkillSource
+from corecoder.skills import SkillCandidate, SkillManager, SkillRegistry, SkillRouter, SkillSource
 from corecoder.skills.loader import load_instructions, load_skill
 from corecoder.tools import get_tool
 
@@ -312,7 +312,195 @@ async def test_agent_injects_skill_and_enforces_forbidden_tools(tmp_path):
 def test_builtin_skills_are_discoverable(tmp_path):
     manager = SkillManager.create(project_path=tmp_path, user_dir=tmp_path / "user")
     ids = {skill.manifest.id for skill in manager.registry.all()}
-    assert {"coding.code-review", "python.test-debug", "coding.safe-refactor"} <= ids
+    assert {
+        "coding.code-review",
+        "python.test-debug",
+        "coding.safe-refactor",
+        "coding.feature-implementation",
+        "coding.bug-fix",
+        "testing.test-generation",
+        "docs.technical-documentation",
+        "security.code-audit",
+        "repository.architecture-analysis",
+        "coding.api-design",
+        "coding.api-migration",
+        "maintenance.dependency-upgrade",
+        "quality.performance-optimization",
+        "debugging.concurrency",
+        "debugging.configuration",
+        "quality.error-handling-hardening",
+        "maintenance.dead-code-cleanup",
+        "quality.backward-compatibility",
+        "coding.cli-design",
+        "testing.flaky-test-debug",
+        "testing.integration-test-generation",
+        "testing.coverage-analysis",
+        "devops.ci-cd-debug",
+        "devops.containerization",
+        "devops.deployment-troubleshooting",
+        "release.preparation",
+        "release.package-publishing",
+        "data.database-migration",
+        "data.validation",
+        "security.secrets-audit",
+        "security.dependency-audit",
+        "reliability.logging-observability",
+        "docs.migration-guide",
+        "docs.changelog-release-notes",
+        "reliability.incident-root-cause",
+    } <= ids
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("Add export support to this command", "coding.feature-implementation"),
+        ("This command crashes on empty input; find and fix the bug", "coding.bug-fix"),
+        ("Add unit tests for the parser edge cases", "testing.test-generation"),
+        ("Update the README for the new configuration", "docs.technical-documentation"),
+        ("Audit this authentication flow for security vulnerabilities", "security.code-audit"),
+        ("Explain this repository architecture and execution flow", "repository.architecture-analysis"),
+        ("Design a versioned REST API for project search", "coding.api-design"),
+        ("Migrate clients from API v1 to v2 without downtime", "coding.api-migration"),
+        ("Upgrade Pydantic to the next major version", "maintenance.dependency-upgrade"),
+        ("Profile and reduce the parser latency", "quality.performance-optimization"),
+        ("Find the race condition causing duplicate writes", "debugging.concurrency"),
+        ("Find why this environment variable is ignored", "debugging.configuration"),
+        (
+            "Improve timeout handling and retry behavior in this client",
+            "quality.error-handling-hardening",
+        ),
+        (
+            "Remove unused modules and dependencies from this package",
+            "maintenance.dead-code-cleanup",
+        ),
+        (
+            "Check whether this release breaks existing API clients",
+            "quality.backward-compatibility",
+        ),
+        ("Design commands and flags for the new project manager", "coding.cli-design"),
+        (
+            "This test fails intermittently in CI; find the source of flakiness",
+            "testing.flaky-test-debug",
+        ),
+        (
+            "Add integration tests for the API and database transaction",
+            "testing.integration-test-generation",
+        ),
+        (
+            "Analyze the highest-risk gaps in our test coverage",
+            "testing.coverage-analysis",
+        ),
+        (
+            "The GitHub Actions build fails only in CI; diagnose it",
+            "devops.ci-cd-debug",
+        ),
+        ("Create a production Dockerfile for this service", "devops.containerization"),
+        (
+            "The service is unhealthy after deployment; find the cause",
+            "devops.deployment-troubleshooting",
+        ),
+        ("Prepare version 2.1.0 for release", "release.preparation"),
+        ("Build and publish this Python package to PyPI", "release.package-publishing"),
+        (
+            "Add a zero-downtime migration for this database column",
+            "data.database-migration",
+        ),
+        (
+            "Add validation and error reporting for imported CSV records",
+            "data.validation",
+        ),
+        (
+            "Audit this repository for exposed credentials and unsafe secret logging",
+            "security.secrets-audit",
+        ),
+        (
+            "Audit our locked dependencies for security and provenance risk",
+            "security.dependency-audit",
+        ),
+        (
+            "Add structured logs and latency metrics to this request path",
+            "reliability.logging-observability",
+        ),
+        ("Write a migration guide from API v1 to v2", "docs.migration-guide"),
+        (
+            "Write release notes from the changes in this version",
+            "docs.changelog-release-notes",
+        ),
+        (
+            "Create an RCA from these incident logs and timeline",
+            "reliability.incident-root-cause",
+        ),
+        ("设计一个支持分页的项目查询 API", "coding.api-design"),
+        ("将调用方从 API v1 平滑迁移到 v2", "coding.api-migration"),
+        ("升级项目中的 Pydantic 依赖", "maintenance.dependency-upgrade"),
+        ("分析并降低解析器的性能延迟", "quality.performance-optimization"),
+        ("排查导致重复写入的并发竞态", "debugging.concurrency"),
+        ("排查环境变量为什么没有生效", "debugging.configuration"),
+        ("GitHub Actions 在 CI 中构建失败", "devops.ci-cd-debug"),
+        ("为这个服务创建生产 Dockerfile", "devops.containerization"),
+        ("编写数据库字段零停机迁移", "data.database-migration"),
+        ("检查仓库是否存在密钥泄露", "security.secrets-audit"),
+        ("编写从 API v1 到 v2 的迁移指南", "docs.migration-guide"),
+        ("根据日志进行生产故障复盘", "reliability.incident-root-cause"),
+    ],
+)
+def test_new_builtin_skills_route_for_distinct_intents(tmp_path, query, expected):
+    manager = SkillManager.create(project_path=tmp_path, user_dir=tmp_path / "user")
+    result = manager.route(
+        query,
+        {"read_file", "grep", "glob", "bash", "write_file", "edit_file", "edit_ast"},
+    )
+    assert result.selected_ids == [expected]
+
+
+def test_router_drops_weak_automatic_candidate_beside_clear_winner(tmp_path):
+    _write_skill(tmp_path, "test.strong")
+    _write_skill(
+        tmp_path,
+        "test.weak",
+        name="Generic helper",
+        summary="Handle a generic command safely.",
+        tags=["command"],
+        aliases=[],
+        intents=[],
+        examples={"positive": [], "negative": []},
+    )
+    result = SkillRouter(_registry(tmp_path), max_active=2).route(
+        "the alpha deployment failed after release"
+    )
+    assert result.selected_ids == ["test.strong"]
+
+
+def test_relative_floor_ignores_higher_scoring_candidate_rejected_by_constraints(tmp_path):
+    _write_skill(tmp_path, "test.explicit", exclusive_group="occupied")
+    _write_skill(tmp_path, "test.blocked", exclusive_group="occupied")
+    _write_skill(tmp_path, "test.fallback")
+    registry = _registry(tmp_path)
+    candidates = [
+        SkillCandidate(
+            skill=registry.get("test.explicit"),
+            score=10.0,
+            explicit=True,
+        ),
+        SkillCandidate(
+            skill=registry.get("test.blocked"),
+            score=0.8,
+        ),
+        SkillCandidate(
+            skill=registry.get("test.fallback"),
+            score=0.3,
+        ),
+    ]
+    rejected = []
+
+    selected = SkillRouter(registry, max_active=3)._rank_and_select(candidates, rejected)
+
+    assert [candidate.skill.manifest.id for candidate in selected] == [
+        "test.explicit",
+        "test.fallback",
+    ]
+    assert any("exclusive group" in reason for reason in rejected)
 
 
 def test_router_ignores_language_names_inside_file_paths(tmp_path):

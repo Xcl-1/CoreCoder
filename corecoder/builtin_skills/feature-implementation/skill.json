@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "id": "coding.feature-implementation",
+  "name": "Feature Implementation",
+  "version": "1.0.0",
+  "summary": "Implement a requested feature end to end while preserving existing contracts and verifying behavior.",
+  "category": ["coding", "implementation", "feature"],
+  "tags": ["feature", "implementation", "add capability", "功能开发", "实现功能"],
+  "aliases": ["build feature", "开发功能"],
+  "intents": ["implement this feature", "add this capability", "实现这个功能", "新增功能"],
+  "applies_when": ["The user asks to add or implement observable product behavior."],
+  "not_when": ["fix a bug", "refactor without behavior change", "review only", "修复缺陷", "仅重构", "仅审查"],
+  "examples": {
+    "positive": ["Add export support to this command", "为这个命令增加导出功能"],
+    "negative": ["Review this change without editing it", "重构代码但不要改变行为"]
+  },
+  "tools": {
+    "required": ["read_file", "grep"],
+    "recommended": ["glob", "edit_file", "write_file", "bash"],
+    "forbidden": []
+  },
+  "exclusive_group": "implementation-mode",
+  "token_budget": 1000,
+  "status": "active"
+}

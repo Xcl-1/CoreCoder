@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "id": "security.code-audit",
+  "name": "Security Code Audit",
+  "version": "1.0.0",
+  "summary": "Perform a read-only security-focused audit of trust boundaries, inputs, permissions, and sensitive operations.",
+  "category": ["security", "coding", "audit"],
+  "tags": ["security", "vulnerability", "audit", "安全审计", "漏洞", "权限"],
+  "aliases": ["security review", "安全检查"],
+  "intents": ["audit this code for security issues", "find vulnerabilities", "进行安全审计", "检查安全漏洞"],
+  "applies_when": ["The user explicitly requests security analysis or vulnerability review."],
+  "not_when": ["general code review", "implement security feature", "普通代码审查", "实现安全功能"],
+  "examples": {
+    "positive": ["Audit this authentication flow for security vulnerabilities", "审计这个鉴权流程是否存在安全漏洞"],
+    "negative": ["Review this refactor for correctness", "给登录页增加双因素认证"]
+  },
+  "tools": {
+    "required": ["read_file", "grep"],
+    "recommended": ["glob"],
+    "forbidden": ["write_file", "edit_file", "edit_ast", "bash", "agent", "undo_changes"]
+  },
+  "conflicts_with": ["coding.code-review"],
+  "exclusive_group": "review-mode",
+  "token_budget": 1000,
+  "status": "active"
+}

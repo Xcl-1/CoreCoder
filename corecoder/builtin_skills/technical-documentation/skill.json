@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "id": "docs.technical-documentation",
+  "name": "Technical Documentation",
+  "version": "1.0.0",
+  "summary": "Create or update accurate README, API, configuration, and developer documentation from repository evidence.",
+  "category": ["documentation", "writing", "developer-experience"],
+  "tags": ["documentation", "README", "API docs", "文档", "技术文档", "使用说明"],
+  "aliases": ["write docs", "更新文档"],
+  "intents": ["document this feature", "update the README", "编写技术文档", "更新使用说明"],
+  "applies_when": ["The requested deliverable is repository or API documentation."],
+  "not_when": ["review code", "implement feature only", "代码审查", "仅实现功能"],
+  "examples": {
+    "positive": ["Update the README for the new configuration options", "为新增配置项更新 README"],
+    "negative": ["Review this pull request for bugs", "实现接口但不需要文档"]
+  },
+  "tools": {
+    "required": ["read_file"],
+    "recommended": ["grep", "glob", "edit_file", "write_file"],
+    "forbidden": []
+  },
+  "exclusive_group": "documentation-mode",
+  "token_budget": 900,
+  "status": "active"
+}
