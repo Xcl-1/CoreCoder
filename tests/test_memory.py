@@ -369,7 +369,7 @@ def test_engine_injects_management_policy_without_matches(tmp_path):
     assert "Relevant cross-session memory" not in prompt
 
 
-def test_agent_memory_context_is_transient_and_close_is_idempotent():
+def test_agent_memory_context_is_transient_and_explicit_learning_is_idempotent():
     class _StubMemory:
         def __init__(self):
             self.learn_calls = 0
@@ -391,9 +391,77 @@ def test_agent_memory_context_is_transient_and_close_is_idempotent():
 
     assert "remember pytest" in agent._full_messages()[0]["content"]
     assert all("remember pytest" not in str(message) for message in agent.messages)
+    agent.learn()
+    agent.learn()
+    assert memory.learn_calls == 1
+
     agent.close()
     agent.close()
     assert memory.learn_calls == 1
+
+
+def test_agent_checkpoint_schedules_each_complete_turn_once(tmp_path):
+    class _Worker:
+        def __init__(self):
+            self.submitted = []
+
+        def submit(self, session_id):
+            self.submitted.append(session_id)
+
+        def close(self, **_kwargs):
+            pass
+
+    memory = MemoryEngine(_FakeLLM([]), root=tmp_path, project_path=tmp_path)
+    worker = _Worker()
+    agent = Agent(
+        llm=LLM.__new__(LLM),
+        tools=[],
+        replay=False,
+        memory=memory,
+        memory_worker=worker,
+        session_id="incremental-session",
+    )
+    agent.messages = [
+        {"role": "user", "content": "Remember that I prefer concise replies."},
+        {"role": "assistant", "content": "Understood."},
+    ]
+
+    agent.checkpoint_memory()
+    agent.checkpoint_memory()
+
+    assert worker.submitted == ["incremental-session"]
+    assert memory.pending_count() == 1
+
+
+def test_agent_close_never_learns_or_waits():
+    class _Memory:
+        def __init__(self):
+            self.learn_calls = 0
+
+        def learn(self, *_args, **_kwargs):
+            self.learn_calls += 1
+
+    class _Worker:
+        def __init__(self):
+            self.close_calls = []
+
+        def close(self, **kwargs):
+            self.close_calls.append(kwargs)
+
+    memory = _Memory()
+    worker = _Worker()
+    agent = Agent(
+        llm=LLM.__new__(LLM),
+        tools=[],
+        replay=False,
+        memory=memory,
+        memory_worker=worker,
+    )
+
+    agent.close()
+
+    assert memory.learn_calls == 0
+    assert worker.close_calls == [{"wait": False}]
 
 
 def test_memory_config_from_env(tmp_path, monkeypatch):

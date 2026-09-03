@@ -19,7 +19,7 @@ from . import __version__
 from .agent import Agent
 from .config import Config
 from .llm import LLM, LiteLLM
-from .memory import MemoryEngine
+from .memory import MemoryEngine, MemoryWorker
 from .security import Guard, PermissionRule
 from .session import list_sessions, load_session, save_session
 from .skills import SkillManager
@@ -112,10 +112,14 @@ def main():
             if not args.model:
                 agent.llm.model = loaded_model
                 config.model = loaded_model
+            agent.mark_memory_checkpointed()
             console.print(f"[green]Resumed session: {args.resume} (model: {agent.llm.model})[/green]")
         else:
             console.print(f"[red]Session '{args.resume}' not found.[/red]")
             sys.exit(1)
+
+    if memory is not None:
+        agent.memory_worker = _create_memory_worker(config, agent.llm)
 
     # one-shot mode
     if args.prompt:
@@ -181,6 +185,12 @@ def _repl(agent: Agent, config: Config, show_history: bool = False):
     def _newline(event):
         event.current_buffer.insert_text("\n")
 
+    # Only begin recovery after the interface and resumed history are visible.
+    # A stale checkpoint may need model requests, but never blocks startup.
+    memory_worker = getattr(agent, "memory_worker", None)
+    if memory_worker is not None:
+        memory_worker.start(recover_existing=True)
+
     while True:
         try:
             user_input = pt_prompt(
@@ -205,10 +215,8 @@ def _repl(agent: Agent, config: Config, show_history: bool = False):
             continue
         if user_input == "/reset":
             _save_current_session(agent, config)
-            learned = agent.learn()
             agent.reset()
-            suffix = f" Learned {len(learned)} memories." if learned else ""
-            console.print(f"[yellow]Conversation reset.[/yellow]{suffix}")
+            console.print("[yellow]Conversation reset.[/yellow] Memory extraction continues in the background.")
             continue
         if user_input == "/tokens":
             p = agent.llm.total_prompt_tokens
@@ -594,16 +602,24 @@ def _show_help():
 def _create_memory_engine(config: Config, llm):
     if not config.memory_enabled:
         return None
-    engine = MemoryEngine(
+    return MemoryEngine(
         llm=llm,
         root=config.memory_dir,
         project_path=os.getcwd(),
         top_k=config.memory_top_k,
     )
-    recovered = engine.recover_pending()
-    if recovered:
-        logger.info("Recovered memory from %s interrupted session(s)", recovered)
-    return engine
+
+
+def _create_memory_worker(config: Config, llm) -> MemoryWorker:
+    """Give background extraction independent provider and engine state."""
+    worker_llm = llm.fork()
+    engine = MemoryEngine(
+        llm=worker_llm,
+        root=config.memory_dir,
+        project_path=os.getcwd(),
+        top_k=config.memory_top_k,
+    )
+    return MemoryWorker(engine)
 
 
 def _undo_changes(agent: Agent, *, force: bool = False) -> None:
@@ -749,6 +765,9 @@ def _reflect_pending(agent: Agent) -> None:
     if agent.memory is None:
         console.print("[yellow]Memory is disabled.[/yellow]")
         return
+    memory_worker = getattr(agent, "memory_worker", None)
+    if memory_worker is not None:
+        memory_worker.wait_idle()
     recovered = agent.memory.recover_pending(exclude_session=agent.session_id, force=True)
     pending = agent.memory.pending_status()
     remaining = len(pending)

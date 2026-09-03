@@ -36,12 +36,19 @@ def _resolve_blocked() -> set[Path]:
     blocked: set[Path] = set()
     for d in _BLOCKED_DIRS:
         p = Path(d)
-        if p.exists():
-            blocked.add(p.resolve())
+        try:
+            if p.exists():
+                blocked.add(p.resolve())
+        except OSError:
+            # An unreadable sensitive path should never make package import fail.
+            blocked.add(p.absolute())
     for g in _BLOCKED_GLOBS:
         p = Path(g).expanduser()
-        if p.exists():
-            blocked.add(p.resolve())
+        try:
+            if p.exists():
+                blocked.add(p.resolve())
+        except OSError:
+            blocked.add(p.absolute())
     return blocked
 
 

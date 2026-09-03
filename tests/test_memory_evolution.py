@@ -847,3 +847,15 @@ def test_store_lock_is_released(tmp_path):
         assert (tmp_path / ".memory.lock").exists()
 
     assert not (tmp_path / ".memory.lock").exists()
+
+
+def test_store_reclaims_a_fresh_lock_from_a_dead_process(tmp_path, monkeypatch):
+    store = MemoryStore(tmp_path)
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".memory.lock").write_text("999999", encoding="ascii")
+    monkeypatch.setattr("corecoder.memory.store._process_alive", lambda _process_id: False)
+
+    with store.locked(timeout=0.1, stale_after=30.0):
+        assert (tmp_path / ".memory.lock").exists()
+
+    assert not (tmp_path / ".memory.lock").exists()

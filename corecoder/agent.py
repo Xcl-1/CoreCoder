@@ -37,7 +37,7 @@ from .tools.base import Tool
 from .tools.changes import ChangeTracker, bind_change_tracker, reset_change_tracker
 
 if TYPE_CHECKING:
-    from .memory import MemoryEngine
+    from .memory import MemoryEngine, MemoryWorker
     from .security import Guard
     from .skills import SkillManager
 
@@ -112,6 +112,7 @@ class Agent:
         replay: bool = True,
         guard: Guard | None = None,
         memory: MemoryEngine | None = None,
+        memory_worker: MemoryWorker | None = None,
         skills: SkillManager | None = None,
         changes: ChangeTracker | None = None,
         session_id: str | None = None,
@@ -126,9 +127,11 @@ class Agent:
         self._step_number = 0
         self.guard = guard
         self.memory = memory
+        self.memory_worker = memory_worker
         self._memory_prompt = ""
         self._memory_context_loaded = False
         self._memory_finalized = False
+        self._memory_checkpoint_turn_id: str | None = None
         self.skills = skills
         self._skill_prompt = ""
         self._skill_forbidden_tools: set[str] = set()
@@ -440,6 +443,7 @@ class Agent:
         self._memory_prompt = ""
         self._memory_context_loaded = False
         self._memory_finalized = False
+        self._memory_checkpoint_turn_id = None
         self._skill_prompt = ""
         self._skill_forbidden_tools.clear()
         if self.skills is not None:
@@ -492,18 +496,33 @@ class Agent:
             logger.warning("Failed to route task skills", exc_info=True)
 
     def checkpoint_memory(self) -> None:
-        """Queue the latest exchange so an interrupted process can learn later."""
+        """Durably queue the latest turn, then schedule non-blocking learning."""
         if self.memory is None or not hasattr(self.memory, "checkpoint"):
             return
         try:
-            replay_path = self._replay.path if self._replay else None
-            self.memory.checkpoint(self.messages, self.session_id, replay_path=replay_path)
+            turn_id = self.memory.latest_turn_id(self.messages)
+            if turn_id is None or turn_id == self._memory_checkpoint_turn_id:
+                return
+            # Incremental turns already contain tool calls and results, so the
+            # worker need not reread the full (and ever-growing) replay file.
+            path = self.memory.checkpoint(self.messages, self.session_id)
+            if path is None:
+                return
+            self._memory_checkpoint_turn_id = turn_id
+            if self.memory_worker is not None:
+                self.memory_worker.submit(self.session_id)
         except Exception:
             logger.warning("Failed to checkpoint pending memory", exc_info=True)
 
+    def mark_memory_checkpointed(self) -> None:
+        """Mark loaded history as old so resume does not queue it as a new turn."""
+        if self.memory is not None:
+            self._memory_checkpoint_turn_id = self.memory.latest_turn_id(self.messages)
+
     def close(self):
-        """Learn from the conversation and close replay. Safe to call repeatedly."""
-        self.learn()
+        """Stop background intake and close replay without waiting on the network."""
+        if self.memory_worker is not None:
+            self.memory_worker.close(wait=False)
         if self._replay:
             self._replay.close()
 

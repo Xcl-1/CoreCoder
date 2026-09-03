@@ -20,6 +20,18 @@ DEFAULT_MEMORY_DIR = resolve_memory_dir("~/.corecoder/memory")
 _SAFE_ID_RE = re.compile(r"[^a-z0-9._-]+")
 
 
+def _process_alive(process_id: int) -> bool:
+    if process_id == os.getpid():
+        return True
+    try:
+        os.kill(process_id, 0)
+    except ProcessLookupError:
+        return False
+    except OSError as exc:
+        return getattr(exc, "winerror", None) != 87
+    return True
+
+
 def normalize_memory_id(value: str) -> str:
     """Turn an LLM-provided title or id into a safe, stable filename."""
     normalized = _SAFE_ID_RE.sub("-", value.strip().lower()).strip(".-_")[:80]
@@ -85,7 +97,14 @@ class MemoryStore:
                 os.write(descriptor, str(os.getpid()).encode("ascii"))
             except FileExistsError:
                 try:
-                    if time.time() - lock_path.stat().st_mtime > stale_after:
+                    stale = time.time() - lock_path.stat().st_mtime > stale_after
+                    if not stale:
+                        try:
+                            owner_pid = int(lock_path.read_text(encoding="ascii").strip())
+                        except (OSError, ValueError):
+                            owner_pid = 0
+                        stale = owner_pid > 0 and not _process_alive(owner_pid)
+                    if stale:
                         lock_path.unlink()
                         continue
                 except FileNotFoundError:

@@ -48,7 +48,7 @@ class MemoryReflector:
         source = self.source_text(messages, replay_path)
         if not source:
             return None
-        execution_stats = self._execution_stats(replay_path)
+        execution_stats = self._execution_stats(messages, replay_path)
 
         prompt = f"""Review this coding-agent execution and produce a concise, evidence-backed reflection.
 
@@ -121,9 +121,14 @@ Execution source:
             role = message.get("role", "?")
             content = message.get("content")
             if not isinstance(content, str) or not content.strip():
-                continue
-            limit = 1_500 if role == "tool" else 3_000
-            parts.append(f"[{role}] {redact_secrets(content.strip()[:limit])}")
+                content = ""
+            if content.strip():
+                limit = 1_500 if role == "tool" else 3_000
+                parts.append(f"[{role}] {redact_secrets(content.strip()[:limit])}")
+            tool_calls = message.get("tool_calls")
+            if isinstance(tool_calls, list) and tool_calls:
+                rendered = redact_secrets(json.dumps(tool_calls, ensure_ascii=False)[:3_000])
+                parts.append(f"[{role} tool calls] {rendered}")
 
         replay = self._read_replay(replay_path)
         if replay:
@@ -179,25 +184,36 @@ Execution source:
         return "\n".join(rows[-25:])[-12_000:]
 
     @staticmethod
-    def _execution_stats(replay_path: Path | str | None) -> dict[str, int]:
+    def _execution_stats(
+        messages: list[dict],
+        replay_path: Path | str | None,
+    ) -> dict[str, int]:
         stats = {"tool_executions": 0, "successful_tools": 0, "failed_tools": 0}
-        if not replay_path:
-            return stats
-        path = Path(replay_path)
-        if not path.exists():
-            return stats
-        try:
-            for line in path.read_text(encoding="utf-8").splitlines()[-50:]:
-                if not line.strip():
-                    continue
-                record = json.loads(line)
-                for execution in record.get("tool_executions", []):
-                    stats["tool_executions"] += 1
-                    key = "successful_tools" if execution.get("success", False) else "failed_tools"
-                    stats[key] += 1
-        except (OSError, json.JSONDecodeError, TypeError, AttributeError):
-            logger.debug("Could not calculate replay execution statistics", exc_info=True)
-            return {"tool_executions": 0, "successful_tools": 0, "failed_tools": 0}
+        if replay_path:
+            path = Path(replay_path)
+            if path.exists():
+                try:
+                    for line in path.read_text(encoding="utf-8").splitlines()[-50:]:
+                        if not line.strip():
+                            continue
+                        record = json.loads(line)
+                        for execution in record.get("tool_executions", []):
+                            stats["tool_executions"] += 1
+                            key = "successful_tools" if execution.get("success", False) else "failed_tools"
+                            stats[key] += 1
+                except (OSError, json.JSONDecodeError, TypeError, AttributeError):
+                    logger.debug("Could not calculate replay execution statistics", exc_info=True)
+                if stats["tool_executions"]:
+                    return stats
+
+        failure_prefixes = ("error", "[security]", "[interrupted]", "failed")
+        for message in messages:
+            if message.get("role") != "tool":
+                continue
+            content = str(message.get("content") or "").strip().casefold()
+            stats["tool_executions"] += 1
+            key = "failed_tools" if content.startswith(failure_prefixes) else "successful_tools"
+            stats[key] += 1
         return stats
 
     @staticmethod

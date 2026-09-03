@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import os
 import time
+import uuid
 from pathlib import Path
 
 from .extractor import MemoryExtractor
@@ -17,7 +20,7 @@ from .store import MemoryStore, normalize_memory_id
 logger = logging.getLogger(__name__)
 
 MEMORY_POLICY_PROMPT = """# Cross-session memory policy
-Memory files are managed automatically by MemoryEngine at session end. Do not inspect, edit, script, or directly modify the memory directory unless the user explicitly asks for file-level memory administration. When the user states or updates a preference, acknowledge that it will be considered for saving at session end; do not claim it is already saved and do not use tools to persist it yourself."""
+Memory files are managed automatically by MemoryEngine from durable per-turn checkpoints. Do not inspect, edit, script, or directly modify the memory directory unless the user explicitly asks for file-level memory administration. When the user states or updates a preference, acknowledge that it has been queued for background consideration; do not claim it is already saved and do not use tools to persist it yourself."""
 
 
 class MemoryEngine:
@@ -107,12 +110,16 @@ class MemoryEngine:
         *,
         _structured_retry: bool = False,
         _record_failure: bool = True,
+        _pending_path: Path | None = None,
+        _pending_token: str | None = None,
+        _processed_turn_ids: set[str] | None = None,
     ) -> list[Memory]:
         self.last_learning_error = None
         if not self._has_complete_exchange(messages):
             return []
 
-        reflection = self.reflector.reflect(messages, replay_path) if replay_path else None
+        should_reflect = bool(replay_path) or self._has_tool_exchange(messages)
+        reflection = self.reflector.reflect(messages, replay_path) if should_reflect else None
         evidence_source = self.reflector.source_text(messages, replay_path) if reflection else ""
         existing = self.store.list()
         proposals: list[ExtractedMemory] = []
@@ -211,7 +218,12 @@ class MemoryEngine:
                 self.index.rebuild(list(by_id.values()))
 
         self._retrieved_this_session.clear()
-        self._clear_pending(source_session)
+        self._ack_pending(
+            source_session,
+            path=_pending_path,
+            expected_token=_pending_token,
+            processed_turn_ids=_processed_turn_ids,
+        )
         return saved
 
     # ---- crash recovery queue ----------------------------------------
@@ -222,24 +234,45 @@ class MemoryEngine:
         source_session: str,
         replay_path: Path | str | None = None,
     ) -> Path | None:
-        """Atomically queue the latest complete exchange for crash recovery."""
-        if not self._has_complete_exchange(messages):
+        """Atomically append the latest complete turn to the learning queue."""
+        turn = self._latest_complete_turn(messages)
+        if not turn:
             return None
         pending_dir = self.store.root / ".pending"
         pending_dir.mkdir(parents=True, exist_ok=True)
         safe_id = normalize_memory_id(source_session)
         path = pending_dir / f"{safe_id}.json"
         temporary = pending_dir / f"{safe_id}.tmp"
-        payload = {
-            "session_id": source_session,
-            "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "checkpointed_at": time.time(),
-            "attempts": 0,
-            "messages": messages,
-            "replay_path": str(replay_path) if replay_path else None,
-        }
-        temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        temporary.replace(path)
+        turn_id = self.turn_id(turn)
+
+        with self.store.locked():
+            existing: dict = {}
+            if path.exists():
+                try:
+                    loaded = json.loads(path.read_text(encoding="utf-8"))
+                    if isinstance(loaded, dict):
+                        existing = loaded
+                except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                    existing = {}
+
+            turns = self._pending_turns(existing)
+            if any(item.get("id") == turn_id for item in turns):
+                return path
+            turns.append({"id": turn_id, "messages": turn})
+            payload = {
+                "session_id": source_session,
+                "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "checkpointed_at": time.time(),
+                "checkpoint_token": uuid.uuid4().hex,
+                "owner_pid": os.getpid(),
+                "attempts": int(existing.get("attempts", 0)),
+                "turns": turns,
+                "messages": self._flatten_turns(turns),
+                "replay_path": str(replay_path) if replay_path else None,
+                "incremental": True,
+            }
+            temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            temporary.replace(path)
         return path
 
     def recover_pending(
@@ -256,46 +289,149 @@ class MemoryEngine:
         recovered = 0
         paths = sorted(pending_dir.glob("*.json"), key=lambda item: item.stat().st_mtime)
         for path in paths[:limit]:
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-                session_id = str(payload["session_id"])
-                if session_id == exclude_session:
-                    continue
-                checkpointed_at = float(payload.get("checkpointed_at", path.stat().st_mtime))
-                if not force and time.time() - checkpointed_at < min_age_seconds:
-                    continue
-                messages = payload["messages"]
-                if not isinstance(messages, list):
-                    raise TypeError("pending messages must be a list")
-                self.learn(
-                    messages,
-                    session_id,
-                    payload.get("replay_path"),
-                    _structured_retry=True,
-                    _record_failure=False,
-                )
-                if not path.exists():
-                    recovered += 1
-                else:
-                    self._record_pending_failure(path, payload, self.last_learning_error)
-            except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
-                logger.warning("Skipping invalid pending memory checkpoint: %s", path)
+            if self._recover_path(
+                path,
+                exclude_session=exclude_session,
+                force=force,
+                min_age_seconds=min_age_seconds,
+            ):
+                recovered += 1
         return recovered
 
-    def _record_pending_failure(self, path: Path, payload: dict, error: str | None = None) -> None:
-        attempts = int(payload.get("attempts", 0)) + 1
-        payload["attempts"] = attempts
-        payload["last_attempted_at"] = utc_now()
-        payload["last_error"] = (error or "memory extraction did not complete")[:500]
-        temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        temporary.replace(path)
-        if attempts >= 3:
-            failed_dir = self.store.root / ".failed"
-            failed_dir.mkdir(parents=True, exist_ok=True)
-            path.replace(failed_dir / path.name)
-            logger.warning("Moved repeatedly failing memory checkpoint to %s", failed_dir / path.name)
-            return
+    def recover_session(self, source_session: str, *, force: bool = True) -> bool:
+        """Process the current pending batch for one session."""
+        path = self.store.root / ".pending" / f"{normalize_memory_id(source_session)}.json"
+        return self._recover_path(path, force=force, min_age_seconds=0.0)
+
+    def pending_session_ids(
+        self,
+        limit: int = 10,
+        min_age_seconds: float = 300.0,
+    ) -> list[str]:
+        """List old-enough pending sessions without processing them."""
+        pending_dir = self.store.root / ".pending"
+        if not pending_dir.exists():
+            return []
+        result: list[str] = []
+        paths = sorted(pending_dir.glob("*.json"), key=lambda item: item.stat().st_mtime)
+        for path in paths:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                checkpointed_at = float(payload.get("checkpointed_at", path.stat().st_mtime))
+                age = time.time() - checkpointed_at
+                owner_pid = int(payload.get("owner_pid", 0))
+                if age < min_age_seconds and (owner_pid <= 0 or self._process_alive(owner_pid)):
+                    continue
+                session_id = str(payload["session_id"])
+                if session_id not in result:
+                    result.append(session_id)
+                if len(result) >= limit:
+                    break
+            except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+                logger.warning("Skipping invalid pending memory checkpoint: %s", path)
+        return result
+
+    @staticmethod
+    def _process_alive(process_id: int) -> bool:
+        if process_id == os.getpid():
+            return True
+        try:
+            os.kill(process_id, 0)
+        except ProcessLookupError:
+            return False
+        except OSError as exc:
+            # Windows reports a missing PID as ERROR_INVALID_PARAMETER (87)
+            # rather than ProcessLookupError.
+            return getattr(exc, "winerror", None) != 87
+        return True
+
+    def _recover_path(
+        self,
+        path: Path,
+        *,
+        exclude_session: str | None = None,
+        force: bool = False,
+        min_age_seconds: float = 300.0,
+    ) -> bool:
+        if not path.exists():
+            return False
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            session_id = str(payload["session_id"])
+            if session_id == exclude_session:
+                return False
+            checkpointed_at = float(payload.get("checkpointed_at", path.stat().st_mtime))
+            if not force and time.time() - checkpointed_at < min_age_seconds:
+                return False
+            messages = payload["messages"]
+            if not isinstance(messages, list):
+                raise TypeError("pending messages must be a list")
+            token = payload.get("checkpoint_token")
+            if not self._has_complete_exchange(messages):
+                self.last_learning_error = "pending checkpoint has no complete exchange"
+                self._record_pending_failure(
+                    path,
+                    payload,
+                    self.last_learning_error,
+                    expected_token=str(token) if token else None,
+                )
+                return False
+            processed_turn_ids = {
+                str(item.get("id"))
+                for item in payload.get("turns", [])
+                if isinstance(item, dict) and item.get("id")
+            }
+            self.learn(
+                messages,
+                session_id,
+                payload.get("replay_path"),
+                _structured_retry=True,
+                _record_failure=False,
+                _pending_path=path,
+                _pending_token=str(token) if token else None,
+                _processed_turn_ids=processed_turn_ids,
+            )
+            if self.last_learning_error is None:
+                return True
+            self._record_pending_failure(
+                path,
+                payload,
+                self.last_learning_error,
+                expected_token=str(token) if token else None,
+            )
+        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+            logger.warning("Skipping invalid pending memory checkpoint: %s", path)
+        return False
+
+    def _record_pending_failure(
+        self,
+        path: Path,
+        payload: dict,
+        error: str | None = None,
+        *,
+        expected_token: str | None = None,
+    ) -> None:
+        with self.store.locked():
+            if not path.exists():
+                return
+            try:
+                current = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                current = payload
+            if expected_token and current.get("checkpoint_token") != expected_token:
+                return
+            attempts = int(current.get("attempts", 0)) + 1
+            current["attempts"] = attempts
+            current["last_attempted_at"] = utc_now()
+            current["last_error"] = (error or "memory extraction did not complete")[:500]
+            temporary = path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(current, ensure_ascii=False), encoding="utf-8")
+            temporary.replace(path)
+            if attempts >= 3:
+                failed_dir = self.store.root / ".failed"
+                failed_dir.mkdir(parents=True, exist_ok=True)
+                path.replace(failed_dir / path.name)
+                logger.warning("Moved repeatedly failing memory checkpoint to %s", failed_dir / path.name)
 
     def _record_pending_failure_for_session(self, source_session: str, error: str) -> None:
         path = self.store.root / ".pending" / f"{normalize_memory_id(source_session)}.json"
@@ -337,12 +473,89 @@ class MemoryEngine:
                 })
         return statuses
 
-    def _clear_pending(self, source_session: str) -> None:
-        path = self.store.root / ".pending" / f"{normalize_memory_id(source_session)}.json"
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
+    def _ack_pending(
+        self,
+        source_session: str,
+        *,
+        path: Path | None = None,
+        expected_token: str | None = None,
+        processed_turn_ids: set[str] | None = None,
+    ) -> None:
+        path = path or self.store.root / ".pending" / f"{normalize_memory_id(source_session)}.json"
+        with self.store.locked():
+            if not path.exists():
+                return
+            if expected_token is None:
+                path.unlink()
+                return
+            try:
+                current = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                return
+            if current.get("checkpoint_token") == expected_token:
+                path.unlink()
+                return
+            if not processed_turn_ids:
+                return
+            turns = [
+                item
+                for item in self._pending_turns(current)
+                if item.get("id") not in processed_turn_ids
+            ]
+            if not turns:
+                path.unlink()
+                return
+            current["turns"] = turns
+            current["messages"] = self._flatten_turns(turns)
+            temporary = path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(current, ensure_ascii=False), encoding="utf-8")
+            temporary.replace(path)
+
+    @staticmethod
+    def _pending_turns(payload: dict) -> list[dict]:
+        turns = payload.get("turns")
+        if isinstance(turns, list):
+            return [item for item in turns if isinstance(item, dict) and isinstance(item.get("messages"), list)]
+        messages = payload.get("messages")
+        if isinstance(messages, list) and messages:
+            return [{"id": MemoryEngine.turn_id(messages), "messages": messages}]
+        return []
+
+    @staticmethod
+    def _flatten_turns(turns: list[dict]) -> list[dict]:
+        return [message for turn in turns for message in turn.get("messages", [])]
+
+    @staticmethod
+    def turn_id(messages: list[dict]) -> str:
+        serialized = json.dumps(messages, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:20]
+
+    @classmethod
+    def latest_turn_id(cls, messages: list[dict]) -> str | None:
+        turn = cls._latest_complete_turn(messages)
+        return cls.turn_id(turn) if turn else None
+
+    @classmethod
+    def latest_turn_has_tools(cls, messages: list[dict]) -> bool:
+        return cls._has_tool_exchange(cls._latest_complete_turn(messages))
+
+    @classmethod
+    def _latest_complete_turn(cls, messages: list[dict]) -> list[dict]:
+        last_user = next(
+            (index for index in range(len(messages) - 1, -1, -1) if messages[index].get("role") == "user"),
+            None,
+        )
+        if last_user is None:
+            return []
+        turn = messages[last_user:]
+        return turn if cls._has_complete_exchange(turn) else []
+
+    @staticmethod
+    def _has_tool_exchange(messages: list[dict]) -> bool:
+        return any(
+            message.get("role") == "tool" or bool(message.get("tool_calls"))
+            for message in messages
+        )
 
     # ---- lifecycle administration ------------------------------------
 

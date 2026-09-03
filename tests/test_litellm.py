@@ -113,6 +113,20 @@ class TestLiteLLMClass:
         assert llm.total_completion_tokens == 0
 
 
+def test_openai_compatible_client_is_lazy_and_forked_independently():
+    llm = LLM(model="test-model", api_key="test-key", base_url="http://localhost:1234", max_tokens=42)
+
+    forked = llm.fork()
+
+    assert llm.client is None
+    assert forked.client is None
+    assert forked is not llm
+    assert forked.model == "test-model"
+    assert forked.api_key == "test-key"
+    assert forked.base_url == "http://localhost:1234"
+    assert forked.extra == {"max_tokens": 42}
+
+
 # ---------------------------------------------------------------------------
 # _call_with_retry
 # ---------------------------------------------------------------------------

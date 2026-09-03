@@ -12,8 +12,7 @@ single unified interface. Set CORECODER_PROVIDER=litellm.
 import json
 import logging
 import time
-
-from openai import APIConnectionError, APIError, APITimeoutError, BadRequestError, OpenAI, RateLimitError
+from typing import Any
 
 from .models import LLMResponse, ToolCall
 
@@ -61,10 +60,37 @@ class LLM:
         **kwargs,
     ):
         self.model = model
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
+        self.api_key = api_key
+        self.base_url = base_url
+        # Importing the OpenAI SDK dominates cold CLI startup.  Delay both the
+        # import and client construction until the first real model request.
+        self.client: Any | None = None
         self.extra = kwargs  # temperature, max_tokens, etc.
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
+
+    def fork(self) -> "LLM":
+        """Create an independent provider instance for background work."""
+        return type(self)(
+            model=self.model,
+            api_key=self.api_key,
+            base_url=self.base_url,
+            **self.extra,
+        )
+
+    def close(self) -> None:
+        """Close an initialized provider client without forcing initialization."""
+        client = getattr(self, "client", None)
+        if client is not None:
+            client.close()
+            self.client = None
+
+    def _get_client(self):
+        if self.client is None:
+            from openai import OpenAI
+
+            self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        return self.client
 
     @property
     def estimated_cost(self) -> float | None:
@@ -100,7 +126,12 @@ class LLM:
         params["stream_options"] = {"include_usage": True}
         try:
             stream = self._call_with_retry(params)
-        except BadRequestError:
+        except Exception as exc:
+            # Keep the provider-specific import lazy along with the SDK itself.
+            from openai import BadRequestError
+
+            if not isinstance(exc, BadRequestError):
+                raise
             params.pop("stream_options", None)
             stream = self._call_with_retry(params)
 
@@ -178,9 +209,12 @@ class LLM:
 
     def _call_with_retry(self, params: dict, max_retries: int = 3):
         """Retry on transient errors with exponential backoff."""
+        from openai import APIConnectionError, APIError, APITimeoutError, RateLimitError
+
+        client = self._get_client()
         for attempt in range(max_retries):
             try:
-                return self.client.chat.completions.create(**params)
+                return client.chat.completions.create(**params)
             except (RateLimitError, APITimeoutError, APIConnectionError) as e:
                 if attempt == max_retries - 1:
                     logger.error("LLM call failed after %d retries: %s", max_retries, e)
@@ -226,6 +260,7 @@ class LiteLLM(LLM):
         self.model = model
         self.api_key = api_key
         self.base_url = base_url
+        self.client = None
         self.extra = kwargs
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
