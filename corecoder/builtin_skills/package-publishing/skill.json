@@ -1,1 +1,128 @@
-{"schema_version":1,"id":"release.package-publishing","name":"Package Publishing","version":"1.0.0","summary":"Build, validate, and publish a package using repository conventions and explicit authorization for external release.","category":["release","packaging","delivery"],"tags":["publish package","PyPI","npm publish","package registry","发布软件包","包发布"],"aliases":["release package","发布包"],"intents":["publish this package","将软件包发布到仓库"],"applies_when":["The user explicitly requests building or publishing a package artifact."],"not_when":["prepare release only","upgrade dependency","仅准备发布","升级依赖"],"examples":{"positive":["Build and publish this Python package to PyPI","构建并发布这个 Python 包到 PyPI"],"negative":["Prepare version 2.1.0 without publishing","升级项目依赖"]},"tools":{"required":["read_file","bash"],"recommended":["grep","glob"],"forbidden":[]},"exclusive_group":"release-mode","token_budget":1000,"status":"active"}
+{
+  "schema_version": 2,
+  "id": "release.package-publishing",
+  "name": "Package Publishing",
+  "version": "1.0.0",
+  "summary": "Build, validate, and publish a package using repository conventions and explicit authorization for external release.",
+  "layer": "workflow",
+  "category": [
+    "release",
+    "packaging",
+    "delivery"
+  ],
+  "tags": [
+    "publish package",
+    "PyPI",
+    "npm publish",
+    "package registry",
+    "发布软件包",
+    "包发布"
+  ],
+  "aliases": [
+    "release package",
+    "发布包"
+  ],
+  "intents": [
+    "publish this package",
+    "将软件包发布到仓库"
+  ],
+  "signature": {
+    "domains": [
+      "release",
+      "packaging",
+      "delivery"
+    ],
+    "actions": [
+      "publish",
+      "publishes",
+      "publishing",
+      "release",
+      "releases",
+      "发布",
+      "build",
+      "builds",
+      "building",
+      "构建"
+    ],
+    "objects": [
+      "package",
+      "pypi",
+      "npm",
+      "registry",
+      "artifact",
+      "wheel",
+      "软件包",
+      "发布"
+    ],
+    "artifacts": [
+      "pyproject.toml",
+      "package.json",
+      "built wheel"
+    ],
+    "outputs": [
+      "published package"
+    ],
+    "constraints": [
+      "explicit authorization"
+    ]
+  },
+  "applies_when": [
+    "The user explicitly requests building or publishing a package artifact."
+  ],
+  "not_when": [
+    "prepare release only",
+    "upgrade dependency",
+    "仅准备发布",
+    "升级依赖"
+  ],
+  "examples": {
+    "positive": [
+      "Build and publish this Python package to PyPI",
+      "构建并发布软件包到仓库",
+      "构建并发布这个 Python 包到 PyPI"
+    ],
+    "negative": [
+      "Prepare version 2.1.0 for release",
+      "仅准备发布",
+      "Prepare version 2.1.0 without publishing",
+      "升级项目依赖"
+    ],
+    "hard_negative": [
+      "Prepare version 2.1.0 for release",
+      "Upgrade Pydantic to the next major version"
+    ],
+    "contrastive": [
+      {
+        "query": "Prepare version 2.1.0 for release",
+        "expected_skill": "release.preparation",
+        "reason": "Pre-publish release checks belong to release preparation."
+      }
+    ]
+  },
+  "tools": {
+    "required": [
+      "read_file",
+      "bash"
+    ],
+    "recommended": [
+      "grep",
+      "glob"
+    ],
+    "forbidden": []
+  },
+  "relations": {
+    "dependencies": [],
+    "composes_with": [
+      "release.preparation"
+    ],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "high",
+    "rollout_percent": 100
+  },
+  "exclusive_group": "release-mode",
+  "token_budget": 1000,
+  "status": "active"
+}

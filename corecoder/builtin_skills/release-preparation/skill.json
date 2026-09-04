@@ -1,1 +1,134 @@
-{"schema_version":1,"id":"release.preparation","name":"Release Preparation","version":"1.0.0","summary":"Prepare a repository release by checking versioning, tests, artifacts, compatibility, and release notes.","category":["release","quality","delivery"],"tags":["release","version bump","release checklist","发布准备","版本发布"],"aliases":["prepare release","准备发布"],"intents":["prepare the next release","准备新版本发布"],"applies_when":["The user requests repository changes and checks needed before a release."],"not_when":["publish package now","write changelog only","立即发布包","仅写变更日志"],"examples":{"positive":["Prepare version 2.1.0 for release","准备发布 2.1.0 版本"],"negative":["Publish this package to PyPI now","根据这些提交写 CHANGELOG"]},"tools":{"required":["read_file","grep","bash"],"recommended":["glob","edit_file"],"forbidden":[]},"exclusive_group":"release-mode","token_budget":1100,"status":"active"}
+{
+  "schema_version": 2,
+  "id": "release.preparation",
+  "name": "Release Preparation",
+  "version": "1.0.0",
+  "summary": "Prepare a repository release by checking versioning, tests, artifacts, compatibility, and release notes.",
+  "layer": "workflow",
+  "category": [
+    "release",
+    "quality",
+    "delivery"
+  ],
+  "tags": [
+    "release",
+    "version bump",
+    "release checklist",
+    "发布准备",
+    "版本发布"
+  ],
+  "aliases": [
+    "prepare release",
+    "准备发布"
+  ],
+  "intents": [
+    "prepare the next release",
+    "准备新版本发布"
+  ],
+  "signature": {
+    "domains": [
+      "release",
+      "quality",
+      "delivery"
+    ],
+    "actions": [
+      "prepare",
+      "prepares",
+      "preparing",
+      "bump",
+      "bumping",
+      "准备",
+      "analyze",
+      "analyzes",
+      "analyzing",
+      "analysis",
+      "分析"
+    ],
+    "objects": [
+      "release",
+      "version",
+      "version bump",
+      "checklist",
+      "artifact",
+      "发布准备",
+      "版本发布"
+    ],
+    "artifacts": [
+      "pyproject.toml",
+      "release branch"
+    ],
+    "outputs": [
+      "release checklist",
+      "version bump"
+    ],
+    "constraints": [
+      "verified tests"
+    ]
+  },
+  "applies_when": [
+    "The user requests repository changes and checks needed before a release."
+  ],
+  "not_when": [
+    "publish package now",
+    "write changelog only",
+    "立即发布包",
+    "仅写变更日志"
+  ],
+  "examples": {
+    "positive": [
+      "Prepare version 2.1.0 for release",
+      "准备新版本发布并核对发布清单",
+      "准备发布 2.1.0 版本"
+    ],
+    "negative": [
+      "Build and publish this Python package to PyPI",
+      "立即发布软件包",
+      "Publish this package to PyPI now",
+      "根据这些提交写 CHANGELOG"
+    ],
+    "hard_negative": [
+      "Build and publish this Python package to PyPI",
+      "Write release notes from the changes in this version"
+    ],
+    "contrastive": [
+      {
+        "query": "Build and publish this Python package to PyPI",
+        "expected_skill": "release.package-publishing",
+        "reason": "Actually publishing is the package-publishing skill."
+      },
+      {
+        "query": "Write release notes from the changes in this version",
+        "expected_skill": "docs.changelog-release-notes",
+        "reason": "Release-notes authoring is a documentation skill."
+      }
+    ]
+  },
+  "tools": {
+    "required": [
+      "read_file",
+      "grep",
+      "bash"
+    ],
+    "recommended": [
+      "glob",
+      "edit_file"
+    ],
+    "forbidden": []
+  },
+  "relations": {
+    "dependencies": [],
+    "composes_with": [
+      "docs.changelog-release-notes",
+      "release.package-publishing"
+    ],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "medium",
+    "rollout_percent": 100
+  },
+  "exclusive_group": "release-mode",
+  "token_budget": 1100,
+  "status": "active"
+}

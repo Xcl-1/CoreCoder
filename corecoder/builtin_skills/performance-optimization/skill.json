@@ -1,1 +1,135 @@
-{"schema_version":1,"id":"quality.performance-optimization","name":"Performance Optimization","version":"1.0.0","summary":"Measure a performance bottleneck, optimize the dominant cost, and verify behavior and improvement.","category":["quality","performance","coding"],"tags":["performance","profiling","latency","memory","性能优化","性能分析"],"aliases":["optimize performance","性能调优"],"intents":["profile and optimize this code","定位性能瓶颈"],"applies_when":["The user requests measurable speed, memory, throughput, or latency improvement."],"not_when":["general refactor","fix functional bug","普通重构","修复功能缺陷"],"examples":{"positive":["Profile and reduce the parser latency","分析并降低解析器延迟"],"negative":["Clean up this module without behavior changes","修复空输入崩溃"]},"tools":{"required":["read_file","grep","bash"],"recommended":["glob","edit_file","edit_ast"],"forbidden":[]},"exclusive_group":"optimization-mode","token_budget":1100,"status":"active"}
+{
+  "schema_version": 2,
+  "id": "quality.performance-optimization",
+  "name": "Performance Optimization",
+  "version": "1.0.0",
+  "summary": "Measure a performance bottleneck, optimize the dominant cost, and verify behavior and improvement.",
+  "layer": "workflow",
+  "category": [
+    "quality",
+    "performance",
+    "coding"
+  ],
+  "tags": [
+    "performance",
+    "profiling",
+    "latency",
+    "memory",
+    "性能优化",
+    "性能分析"
+  ],
+  "aliases": [
+    "optimize performance",
+    "性能调优"
+  ],
+  "intents": [
+    "profile and optimize this code",
+    "定位性能瓶颈"
+  ],
+  "signature": {
+    "domains": [
+      "quality",
+      "performance",
+      "coding"
+    ],
+    "actions": [
+      "optimize",
+      "optimizes",
+      "optimizing",
+      "profile",
+      "profiling",
+      "优化",
+      "analyze",
+      "analyzes",
+      "analyzing",
+      "analysis",
+      "分析"
+    ],
+    "objects": [
+      "performance",
+      "bottleneck",
+      "latency",
+      "memory",
+      "throughput",
+      "性能",
+      "瓶颈",
+      "延迟"
+    ],
+    "artifacts": [
+      "source code",
+      "benchmark"
+    ],
+    "outputs": [
+      "optimization",
+      "benchmark result"
+    ],
+    "constraints": [
+      "measure first",
+      "preserve behavior"
+    ]
+  },
+  "applies_when": [
+    "The user requests measurable speed, memory, throughput, or latency improvement."
+  ],
+  "not_when": [
+    "general refactor",
+    "fix functional bug",
+    "普通重构",
+    "修复功能缺陷"
+  ],
+  "examples": {
+    "positive": [
+      "Profile and reduce the parser latency",
+      "分析并降低解析器的性能延迟",
+      "分析并降低解析器延迟"
+    ],
+    "negative": [
+      "Refactor the parser module for readability",
+      "普通重构",
+      "Clean up this module without behavior changes",
+      "修复空输入崩溃"
+    ],
+    "hard_negative": [
+      "This command crashes on empty input; find and fix the bug",
+      "Find the race condition causing duplicate writes"
+    ],
+    "contrastive": [
+      {
+        "query": "Refactor the parser module into smaller functions",
+        "expected_skill": "coding.safe-refactor",
+        "reason": "Readability changes without measurement are refactoring."
+      },
+      {
+        "query": "Find the race condition causing duplicate writes",
+        "expected_skill": "debugging.concurrency",
+        "reason": "Timing and locking failures route to concurrency debugging."
+      }
+    ]
+  },
+  "tools": {
+    "required": [
+      "read_file",
+      "grep",
+      "bash"
+    ],
+    "recommended": [
+      "glob",
+      "edit_file",
+      "edit_ast"
+    ],
+    "forbidden": []
+  },
+  "relations": {
+    "dependencies": [],
+    "composes_with": [],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "medium",
+    "rollout_percent": 100
+  },
+  "exclusive_group": "optimization-mode",
+  "token_budget": 1100,
+  "status": "active"
+}

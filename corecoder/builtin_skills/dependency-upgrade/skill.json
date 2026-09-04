@@ -1,1 +1,128 @@
-{"schema_version":1,"id":"maintenance.dependency-upgrade","name":"Dependency Upgrade","version":"1.0.0","summary":"Upgrade project dependencies with compatibility review, minimal lockfile churn, and targeted verification.","category":["maintenance","dependencies","coding"],"tags":["dependency upgrade","package update","lockfile","依赖升级","更新依赖"],"aliases":["upgrade package","升级包"],"intents":["upgrade this dependency","更新项目依赖"],"applies_when":["A package, runtime, or framework version must be upgraded."],"not_when":["security audit only","publish package","仅安全审计","发布软件包"],"examples":{"positive":["Upgrade Pydantic to the next major version","将 Pydantic 升级到下一个主版本"],"negative":["Audit dependencies for vulnerabilities","发布当前 Python 包"]},"tools":{"required":["read_file","grep","bash"],"recommended":["glob","edit_file"],"forbidden":[]},"exclusive_group":"maintenance-change","token_budget":1100,"status":"active"}
+{
+  "schema_version": 2,
+  "id": "maintenance.dependency-upgrade",
+  "name": "Dependency Upgrade",
+  "version": "1.0.0",
+  "summary": "Upgrade project dependencies with compatibility review, minimal lockfile churn, and targeted verification.",
+  "layer": "workflow",
+  "category": [
+    "maintenance",
+    "dependencies",
+    "coding"
+  ],
+  "tags": [
+    "dependency upgrade",
+    "package update",
+    "lockfile",
+    "依赖升级",
+    "更新依赖"
+  ],
+  "aliases": [
+    "upgrade package",
+    "升级包"
+  ],
+  "intents": [
+    "upgrade this dependency",
+    "更新项目依赖"
+  ],
+  "signature": {
+    "domains": [
+      "maintenance",
+      "dependencies",
+      "coding"
+    ],
+    "actions": [
+      "upgrade",
+      "upgrades",
+      "upgrading",
+      "update",
+      "updating",
+      "升级",
+      "更新"
+    ],
+    "objects": [
+      "dependency",
+      "package",
+      "version",
+      "lockfile",
+      "依赖",
+      "版本",
+      "软件包"
+    ],
+    "artifacts": [
+      "requirements.txt",
+      "pyproject.toml",
+      "lockfile"
+    ],
+    "outputs": [
+      "upgraded dependency",
+      "lockfile update"
+    ],
+    "constraints": [
+      "minimal lockfile churn"
+    ]
+  },
+  "applies_when": [
+    "A package, runtime, or framework version must be upgraded."
+  ],
+  "not_when": [
+    "security audit only",
+    "publish package",
+    "仅安全审计",
+    "发布软件包"
+  ],
+  "examples": {
+    "positive": [
+      "Upgrade Pydantic to the next major version",
+      "升级项目中的 Pydantic 依赖",
+      "将 Pydantic 升级到下一个主版本"
+    ],
+    "negative": [
+      "Audit dependencies for vulnerabilities without changing them",
+      "仅做依赖安全审计",
+      "Audit dependencies for vulnerabilities",
+      "发布当前 Python 包"
+    ],
+    "hard_negative": [
+      "Audit our locked dependencies for security and provenance risk",
+      "Build and publish this Python package to PyPI"
+    ],
+    "contrastive": [
+      {
+        "query": "Audit our locked dependencies for security and provenance risk",
+        "expected_skill": "security.dependency-audit",
+        "reason": "Read-only vulnerability assessment is the dependency audit."
+      },
+      {
+        "query": "Remove unused modules and dependencies from this package",
+        "expected_skill": "maintenance.dead-code-cleanup",
+        "reason": "Deleting unused dependencies is dead-code cleanup."
+      }
+    ]
+  },
+  "tools": {
+    "required": [
+      "read_file",
+      "grep",
+      "bash"
+    ],
+    "recommended": [
+      "glob",
+      "edit_file"
+    ],
+    "forbidden": []
+  },
+  "relations": {
+    "dependencies": [],
+    "composes_with": [],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "medium",
+    "rollout_percent": 100
+  },
+  "exclusive_group": "maintenance-change",
+  "token_budget": 1100,
+  "status": "active"
+}

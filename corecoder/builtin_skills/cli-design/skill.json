@@ -1,1 +1,132 @@
-{"schema_version":1,"id":"coding.cli-design","name":"CLI Interface Design","version":"1.0.0","summary":"Design command names, arguments, output, exit codes, safety, and script-friendly CLI behavior.","category":["coding","cli","design"],"tags":["CLI design","command line","arguments","命令行设计","参数设计"],"aliases":["design CLI","设计命令行"],"intents":["design command line interface","设计 CLI 命令和参数"],"applies_when":["The user requests a CLI contract or usability design."],"not_when":["implement CLI feature","debug command crash","实现 CLI","修复命令崩溃"],"examples":{"positive":["Design commands and flags for the new project manager","设计项目管理器的命令和参数"],"negative":["Implement the existing export command","修复命令启动报错"]},"tools":{"required":["read_file","grep"],"recommended":["glob"],"forbidden":["write_file","edit_file","edit_ast","bash","undo_changes"]},"exclusive_group":"design-mode","token_budget":900,"status":"active"}
+{
+  "schema_version": 2,
+  "id": "coding.cli-design",
+  "name": "CLI Interface Design",
+  "version": "1.0.0",
+  "summary": "Design command names, arguments, output, exit codes, safety, and script-friendly CLI behavior.",
+  "layer": "workflow",
+  "category": [
+    "coding",
+    "cli",
+    "design"
+  ],
+  "tags": [
+    "CLI design",
+    "command line",
+    "arguments",
+    "命令行设计",
+    "参数设计"
+  ],
+  "aliases": [
+    "design CLI",
+    "设计命令行"
+  ],
+  "intents": [
+    "design command line interface",
+    "设计 CLI 命令和参数"
+  ],
+  "signature": {
+    "domains": [
+      "coding",
+      "cli",
+      "design"
+    ],
+    "actions": [
+      "design",
+      "designs",
+      "designing",
+      "设计"
+    ],
+    "objects": [
+      "cli",
+      "command",
+      "argument",
+      "flag",
+      "exit code",
+      "命令行",
+      "参数",
+      "子命令"
+    ],
+    "artifacts": [
+      "command line interface"
+    ],
+    "outputs": [
+      "cli contract",
+      "design decision",
+      "命令行设计"
+    ],
+    "constraints": [
+      "read only",
+      "before implementation"
+    ]
+  },
+  "applies_when": [
+    "The user requests a CLI contract or usability design."
+  ],
+  "not_when": [
+    "implement CLI feature",
+    "debug command crash",
+    "实现 CLI",
+    "修复命令崩溃"
+  ],
+  "examples": {
+    "positive": [
+      "Design commands and flags for the new project manager",
+      "设计 CLI 的命令、参数和退出码",
+      "设计项目管理器的命令和参数"
+    ],
+    "negative": [
+      "Implement the new --json output flag",
+      "实现命令行参数解析",
+      "Implement the existing export command",
+      "修复命令启动报错"
+    ],
+    "hard_negative": [
+      "This command crashes when no argument is given",
+      "Design a versioned REST API for project search"
+    ],
+    "contrastive": [
+      {
+        "query": "Design a versioned REST API for project search",
+        "expected_skill": "coding.api-design",
+        "reason": "HTTP and library contracts belong to API design."
+      },
+      {
+        "query": "This command crashes on empty input; find and fix the bug",
+        "expected_skill": "coding.bug-fix",
+        "reason": "A runtime failure needs the bug-fix workflow, not design."
+      }
+    ]
+  },
+  "tools": {
+    "required": [
+      "read_file",
+      "grep"
+    ],
+    "recommended": [
+      "glob"
+    ],
+    "forbidden": [
+      "write_file",
+      "edit_file",
+      "edit_ast",
+      "bash",
+      "undo_changes"
+    ]
+  },
+  "relations": {
+    "dependencies": [],
+    "composes_with": [
+      "coding.feature-implementation"
+    ],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "low",
+    "rollout_percent": 100
+  },
+  "exclusive_group": "design-mode",
+  "token_budget": 900,
+  "status": "active"
+}

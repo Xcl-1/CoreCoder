@@ -1,1 +1,139 @@
-{"schema_version":1,"id":"testing.integration-test-generation","name":"Integration Test Generation","version":"1.0.0","summary":"Create integration tests across component, process, persistence, or service boundaries.","category":["testing","integration","quality"],"tags":["integration test","end to end test","service test","集成测试","端到端测试"],"aliases":["write integration tests","编写集成测试"],"intents":["add integration tests","补充集成测试"],"applies_when":["The requested test must verify interaction across real component boundaries."],"not_when":["unit tests","failing tests","单元测试","测试失败"],"examples":{"positive":["Add integration tests for the API and database transaction","为 API 与数据库事务补充集成测试"],"negative":["Unit test this pure parser function","修复当前失败的测试"]},"tools":{"required":["read_file","grep"],"recommended":["glob","write_file","edit_file","bash"],"forbidden":[]},"conflicts_with":["testing.test-generation","python.test-debug"],"exclusive_group":"python-test-workflow","token_budget":1000,"status":"active"}
+{
+  "schema_version": 2,
+  "id": "testing.integration-test-generation",
+  "name": "Integration Test Generation",
+  "version": "1.0.0",
+  "summary": "Create integration tests across component, process, persistence, or service boundaries.",
+  "layer": "workflow",
+  "category": [
+    "testing",
+    "integration",
+    "quality"
+  ],
+  "tags": [
+    "integration test",
+    "end to end test",
+    "service test",
+    "集成测试",
+    "端到端测试"
+  ],
+  "aliases": [
+    "write integration tests",
+    "编写集成测试"
+  ],
+  "intents": [
+    "add integration tests",
+    "补充集成测试"
+  ],
+  "signature": {
+    "domains": [
+      "testing",
+      "integration",
+      "quality"
+    ],
+    "actions": [
+      "implement",
+      "implementing",
+      "add",
+      "adds",
+      "adding",
+      "test",
+      "testing",
+      "write",
+      "writes",
+      "writing",
+      "实现",
+      "新增",
+      "添加",
+      "测试",
+      "编写"
+    ],
+    "objects": [
+      "integration test",
+      "integration tests",
+      "end to end test",
+      "service test",
+      "api test",
+      "集成测试",
+      "端到端测试"
+    ],
+    "artifacts": [
+      "test suite",
+      "service boundary"
+    ],
+    "outputs": [
+      "integration tests"
+    ],
+    "constraints": [
+      "cross boundary"
+    ]
+  },
+  "applies_when": [
+    "The requested test must verify interaction across real component boundaries."
+  ],
+  "not_when": [
+    "unit tests",
+    "failing tests",
+    "单元测试",
+    "测试失败"
+  ],
+  "examples": {
+    "positive": [
+      "Add integration tests for the API and database transaction",
+      "补充跨服务的端到端集成测试",
+      "为 API 与数据库事务补充集成测试"
+    ],
+    "negative": [
+      "Add unit tests for the parser edge cases",
+      "单元测试",
+      "Unit test this pure parser function",
+      "修复当前失败的测试"
+    ],
+    "hard_negative": [
+      "Add unit tests for the parser edge cases",
+      "The integration test fails with a connection error in CI"
+    ],
+    "contrastive": [
+      {
+        "query": "Add unit tests for the parser edge cases",
+        "expected_skill": "testing.test-generation",
+        "reason": "Isolated unit tests route to test generation."
+      },
+      {
+        "query": "pytest is failing with a traceback after my change",
+        "expected_skill": "python.test-debug",
+        "reason": "Failing tests need the test-debug workflow."
+      }
+    ]
+  },
+  "tools": {
+    "required": [
+      "read_file",
+      "grep"
+    ],
+    "recommended": [
+      "glob",
+      "write_file",
+      "edit_file",
+      "bash"
+    ],
+    "forbidden": []
+  },
+  "conflicts_with": [
+    "testing.test-generation",
+    "python.test-debug"
+  ],
+  "relations": {
+    "dependencies": [],
+    "composes_with": [],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "medium",
+    "rollout_percent": 100
+  },
+  "exclusive_group": "python-test-workflow",
+  "token_budget": 1000,
+  "status": "active"
+}

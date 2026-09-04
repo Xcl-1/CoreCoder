@@ -22,6 +22,10 @@ from .changes import current_change_tracker
 
 class EditASTTool(Tool):
     name = "edit_ast"
+    input_types = ("python_file", "ast_operation")
+    output_type = "diff"
+    permission_scope = "filesystem:write"
+    side_effect = "local_write"
     description = (
         "Edit Python code using AST-aware operations. "
         "Safer than edit_file for structural changes like renaming functions "

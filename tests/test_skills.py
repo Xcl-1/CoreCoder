@@ -8,7 +8,16 @@ import pytest
 
 from corecoder.agent import Agent, AgentRole
 from corecoder.models import LLMResponse
-from corecoder.skills import SkillCandidate, SkillManager, SkillRegistry, SkillRouter, SkillSource
+from corecoder.skills import (
+    RoutingCase,
+    RoutingContext,
+    SkillCandidate,
+    SkillManager,
+    SkillRegistry,
+    SkillRouter,
+    SkillSource,
+    evaluate_router,
+)
 from corecoder.skills.loader import load_instructions, load_skill
 from corecoder.tools import get_tool
 
@@ -269,6 +278,225 @@ def test_router_reports_prompt_budget_rejection_consistently(tmp_path):
     assert any("prompt budget exceeded" in reason for reason in result.rejected)
 
 
+def test_schema_v2_signature_improves_ranking_and_is_exposed(tmp_path):
+    _write_skill(
+        tmp_path,
+        schema_version=2,
+        signature={
+            "domains": ["deployment"],
+            "actions": ["repair"],
+            "objects": ["release pipeline"],
+            "artifacts": [],
+            "outputs": ["working deployment"],
+            "constraints": [],
+        },
+    )
+    result = SkillRouter(_registry(tmp_path)).route(
+        "repair the release pipeline deployment"
+    )
+    assert result.selected_ids == ["test.alpha"]
+    assert result.decision == "auto"
+    assert result.signature.actions == {"repair"}
+    assert {"domains", "actions", "objects"} <= set(
+        result.candidates[0].matched_dimensions
+    )
+
+
+def test_router_abstains_for_weak_generic_request(tmp_path):
+    _write_skill(tmp_path)
+    result = SkillRouter(_registry(tmp_path)).route("Tell me a joke about the weather")
+    assert result.selected == []
+    assert result.decision == "abstain"
+    assert result.prompt == ""
+
+
+def test_per_turn_skill_exclusion_overrides_explicit_and_automatic_routing(tmp_path):
+    _write_skill(tmp_path)
+    result = SkillRouter(_registry(tmp_path)).route(
+        "Do not use $test.alpha to fix the alpha deployment"
+    )
+    assert result.selected == []
+    assert any("disabled for this turn" in reason for reason in result.rejected)
+
+
+def test_v2_mutually_exclusive_near_tie_requests_one_clarification(tmp_path):
+    _write_skill(tmp_path, "test.alpha", schema_version=2, exclusive_group="deploy")
+    _write_skill(tmp_path, "test.beta", schema_version=2, exclusive_group="deploy")
+    result = SkillRouter(
+        _registry(tmp_path),
+        ambiguity_margin=1.0,
+    ).route("fix alpha deployment")
+    assert result.selected == []
+    assert result.decision == "clarify"
+    assert result.needs_clarification
+    assert "Alpha workflow" in result.clarification
+    assert "Do not begin the task" in result.prompt
+
+
+def test_explicit_skill_suppresses_unrelated_automatic_ambiguity(tmp_path):
+    _write_skill(tmp_path, "test.explicit", schema_version=2)
+    _write_skill(tmp_path, "test.alpha", schema_version=2, exclusive_group="deploy")
+    _write_skill(tmp_path, "test.beta", schema_version=2, exclusive_group="deploy")
+    result = SkillRouter(
+        _registry(tmp_path),
+        max_active=3,
+        ambiguity_margin=1.0,
+    ).route("Use $test.explicit to fix alpha deployment")
+    assert result.selected_ids == ["test.explicit"]
+    assert result.decision == "explicit"
+    assert not result.needs_clarification
+
+
+def test_hard_negative_blocks_a_close_lexical_match(tmp_path):
+    _write_skill(
+        tmp_path,
+        schema_version=2,
+        examples={
+            "positive": ["fix alpha deployment"],
+            "negative": [],
+            "hard_negative": ["document alpha deployment"],
+            "contrastive": [],
+        },
+    )
+    result = SkillRouter(_registry(tmp_path)).route("document alpha deployment")
+    assert result.selected == []
+    assert any("hard negative" in reason for reason in result.rejected)
+
+
+def test_contrastive_example_redirects_to_alternative_skill(tmp_path):
+    _write_skill(
+        tmp_path,
+        "test.source",
+        schema_version=2,
+        examples={
+            "positive": ["alpha deployment"],
+            "negative": [],
+            "hard_negative": [],
+            "contrastive": [
+                {
+                    "query": "write alpha deployment docs",
+                    "expected_skill": "test.docs",
+                    "reason": "Documentation is a separate outcome.",
+                }
+            ],
+        },
+    )
+    _write_skill(
+        tmp_path,
+        "test.docs",
+        schema_version=2,
+        name="Specialized writer",
+        summary="Produce a specialized written artifact.",
+        tags=["writer"],
+        intents=["produce written artifact"],
+        examples={"positive": [], "negative": []},
+    )
+    result = SkillRouter(_registry(tmp_path)).route("write alpha deployment docs")
+    assert result.selected_ids == ["test.docs"]
+    assert any("contrastive route" in reason for reason in result.candidates[0].reasons)
+
+
+def test_workflow_activates_declared_atomic_dependency(tmp_path):
+    _write_skill(
+        tmp_path,
+        "test.atomic",
+        name="Atomic helper",
+        layer="atomic",
+        summary="Provide a low-level prerequisite.",
+        tags=["prerequisite"],
+        intents=["atomic prerequisite"],
+        examples={"positive": [], "negative": []},
+    )
+    _write_skill(
+        tmp_path,
+        "test.workflow",
+        schema_version=2,
+        priority=10,
+        relations={
+            "dependencies": ["test.atomic"],
+            "composes_with": [],
+            "supersedes": [],
+        },
+    )
+    result = SkillRouter(_registry(tmp_path), max_active=2).route("fix alpha deployment")
+    assert result.selected_ids == ["test.workflow", "test.atomic"]
+    assert result.candidates[0].skill.manifest.layer == "workflow"
+    assert "required by test.workflow" in result.selected[1].reasons
+
+
+def test_declared_composition_can_add_a_relevant_lower_scoring_support_skill(tmp_path):
+    _write_skill(
+        tmp_path,
+        "test.primary",
+        priority=10,
+        relations={
+            "dependencies": [],
+            "composes_with": ["test.support"],
+            "supersedes": [],
+        },
+    )
+    _write_skill(
+        tmp_path,
+        "test.support",
+        name="Deployment support",
+        summary="Support an alpha deployment failure.",
+        tags=["alpha", "deployment"],
+        intents=["fix alpha deployment"],
+        examples={"positive": ["alpha deployment failed"], "negative": []},
+    )
+    result = SkillRouter(_registry(tmp_path), max_active=2).route("fix alpha deployment")
+    assert set(result.selected_ids) == {"test.primary", "test.support"}
+
+
+def test_shadow_skill_is_scored_but_never_activated(tmp_path):
+    _write_skill(tmp_path, schema_version=2, status="shadow")
+    result = SkillRouter(_registry(tmp_path)).route("fix alpha deployment")
+    assert result.selected == []
+    assert result.candidates[0].shadow is True
+    assert result.decision == "abstain"
+
+
+def test_canary_rollout_zero_requires_explicit_invocation(tmp_path):
+    _write_skill(
+        tmp_path,
+        schema_version=2,
+        status="canary",
+        routing={"allow_implicit": True, "risk": "low", "rollout_percent": 0},
+    )
+    router = SkillRouter(_registry(tmp_path))
+    assert router.route("fix alpha deployment").selected == []
+    assert router.route("Use $test.alpha").selected_ids == ["test.alpha"]
+
+
+def test_catalog_reports_missing_capability_graph_target(tmp_path):
+    _write_skill(
+        tmp_path,
+        schema_version=2,
+        relations={
+            "dependencies": ["test.missing"],
+            "composes_with": [],
+            "supersedes": [],
+        },
+    )
+    router = SkillRouter(_registry(tmp_path))
+    assert any(issue.code == "missing-relation" for issue in router.catalog.issues)
+
+
+def test_offline_router_evaluation_measures_precision_abstention_and_cost(tmp_path):
+    _write_skill(tmp_path)
+    metrics = evaluate_router(
+        SkillRouter(_registry(tmp_path)),
+        [
+            RoutingCase(query="fix alpha deployment", expected_skill="test.alpha"),
+            RoutingCase(query="tell me a joke", expected_skill=None),
+        ],
+    )
+    assert metrics.precision_at_1 == 1.0
+    assert metrics.invocation_precision == 1.0
+    assert metrics.false_activation_rate == 0.0
+    assert metrics.average_loaded_tokens > 0
+
+
 class _CaptureLLM:
     def __init__(self):
         self.calls = []
@@ -349,6 +577,30 @@ def test_builtin_skills_are_discoverable(tmp_path):
         "docs.changelog-release-notes",
         "reliability.incident-root-cause",
     } <= ids
+
+
+def test_builtin_architecture_skill_understands_natural_repository_request(tmp_path):
+    manager = SkillManager.create(project_path=tmp_path, user_dir=tmp_path / "user")
+    result = manager.route(
+        "Please help me understand this repository",
+        {"read_file", "grep", "glob"},
+    )
+    assert result.selected_ids == ["repository.architecture-analysis"]
+    assert result.signature.actions == {"understand"}
+
+
+def test_excluding_review_does_not_activate_an_action_mismatched_skill(tmp_path):
+    manager = SkillManager.create(project_path=tmp_path, user_dir=tmp_path / "user")
+    result = manager.route(
+        "Do not use $coding.code-review to inspect these code changes",
+        {"read_file", "grep", "glob", "bash", "write_file", "edit_file", "edit_ast"},
+    )
+    assert result.selected_ids == []
+    assert result.decision == "abstain"
+    assert any("disabled for this turn" in reason for reason in result.rejected)
+    assert "coding.safe-refactor" not in {
+        candidate.skill.manifest.id for candidate in result.candidates
+    }
 
 
 @pytest.mark.parametrize(
@@ -472,7 +724,7 @@ def test_router_drops_weak_automatic_candidate_beside_clear_winner(tmp_path):
     assert result.selected_ids == ["test.strong"]
 
 
-def test_relative_floor_ignores_higher_scoring_candidate_rejected_by_constraints(tmp_path):
+def test_explicit_skill_suppresses_unrelated_fallback_after_constraint_rejection(tmp_path):
     _write_skill(tmp_path, "test.explicit", exclusive_group="occupied")
     _write_skill(tmp_path, "test.blocked", exclusive_group="occupied")
     _write_skill(tmp_path, "test.fallback")
@@ -496,10 +748,7 @@ def test_relative_floor_ignores_higher_scoring_candidate_rejected_by_constraints
 
     selected = SkillRouter(registry, max_active=3)._rank_and_select(candidates, rejected)
 
-    assert [candidate.skill.manifest.id for candidate in selected] == [
-        "test.explicit",
-        "test.fallback",
-    ]
+    assert [candidate.skill.manifest.id for candidate in selected] == ["test.explicit"]
     assert any("exclusive group" in reason for reason in rejected)
 
 
@@ -580,3 +829,358 @@ def test_parent_skill_forbidden_tools_are_removed_from_executor(tmp_path):
     child_tools = {tool.name for tool in agent._tools_for_role(AgentRole.EXECUTOR)}
     assert "bash" not in child_tools
     assert "read_file" in child_tools
+
+
+def test_all_builtin_skills_are_schema_v2_with_a_clean_catalog(tmp_path):
+    manager = SkillManager.create(project_path=tmp_path, user_dir=tmp_path / "user")
+    builtins = [
+        skill for skill in manager.registry.all() if skill.scope == "builtin"
+    ]
+    assert len(builtins) >= 35
+    not_v2 = [
+        skill.manifest.id
+        for skill in builtins
+        if skill.manifest.schema_version < 2
+    ]
+    assert not_v2 == []
+    # Structured ranking is only usable when every skill declares a signature.
+    assert all(skill.manifest.signature.actions for skill in builtins)
+    assert manager.router.catalog.issues == []
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("fixing a crash when the config file is missing", "coding.bug-fix"),
+        ("the tests are failing after my refactor", "python.test-debug"),
+        ("removing the dead code from the legacy module", "maintenance.dead-code-cleanup"),
+        ("writing integration tests for the payment service", "testing.integration-test-generation"),
+        ("upgrading all dependencies to their latest versions", "maintenance.dependency-upgrade"),
+        ("scanning the repo for leaked API keys", "security.secrets-audit"),
+        ("the container keeps crashing in production", "devops.deployment-troubleshooting"),
+        ("documenting the new configuration options", "docs.technical-documentation"),
+    ],
+)
+def test_inflected_verbs_route_like_their_base_forms(tmp_path, query, expected):
+    """The tokenizer does no stemming, so manifests must carry the inflections."""
+    manager = SkillManager.create(project_path=tmp_path, user_dir=tmp_path / "user")
+    result = manager.route(
+        query,
+        {"read_file", "grep", "glob", "bash", "write_file", "edit_file", "edit_ast"},
+    )
+    assert result.selected_ids == [expected]
+    assert result.decision == "auto"
+
+
+def test_language_name_alone_does_not_activate_a_skill(tmp_path):
+    """A knowledge question that merely names Python is not a test-debugging task."""
+    manager = SkillManager.create(project_path=tmp_path, user_dir=tmp_path / "user")
+    result = manager.route(
+        "What does the walrus operator do in Python",
+        {"read_file", "grep", "glob", "bash", "write_file", "edit_file", "edit_ast"},
+    )
+    assert result.selected_ids == []
+    assert result.decision == "abstain"
+
+
+def test_security_focused_review_routes_to_the_specialist(tmp_path):
+    manager = SkillManager.create(project_path=tmp_path, user_dir=tmp_path / "user")
+    result = manager.route(
+        "reviewing the pull request for security issues",
+        {"read_file", "grep", "glob"},
+    )
+    assert result.selected_ids == ["security.code-audit"]
+    assert result.decision == "auto"
+
+
+def test_excluding_a_skill_also_excludes_its_declared_substitute(tmp_path):
+    """An exclusion must not be silently satisfied by an adjacent capability."""
+    manager = SkillManager.create(project_path=tmp_path, user_dir=tmp_path / "user")
+    result = manager.route(
+        "Do not use $coding.code-review to check whether this release breaks API clients",
+        {"read_file", "grep", "glob", "bash", "write_file", "edit_file", "edit_ast"},
+    )
+    assert "quality.backward-compatibility" not in result.selected_ids
+    assert any(
+        "declared substitute for a skill the user excluded" in reason
+        for reason in result.rejected
+    )
+
+
+def test_explicit_skill_survives_a_conflicting_exclusion(tmp_path):
+    manager = SkillManager.create(project_path=tmp_path, user_dir=tmp_path / "user")
+    result = manager.route(
+        "Do not use $coding.code-review; use $security.code-audit instead",
+        {"read_file", "grep", "glob"},
+    )
+    assert result.selected_ids == ["security.code-audit"]
+    assert result.decision == "explicit"
+
+
+def test_catalog_flags_composition_that_contradicts_a_conflict(tmp_path):
+    _write_skill(
+        tmp_path,
+        "test.alpha",
+        relations={"dependencies": [], "composes_with": ["test.beta"], "supersedes": []},
+    )
+    _write_skill(tmp_path, "test.beta", conflicts_with=["test.alpha"])
+    issues = SkillRouter(_registry(tmp_path)).catalog.issues
+    assert any(
+        issue.code == "contradictory-relation" and set(issue.skill_ids) == {"test.alpha", "test.beta"}
+        for issue in issues
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_returns_router_clarification_without_calling_llm_or_tools(tmp_path):
+    _write_skill(tmp_path, "test.alpha", schema_version=2, exclusive_group="deploy")
+    _write_skill(tmp_path, "test.beta", schema_version=2, exclusive_group="deploy")
+    registry = _registry(tmp_path)
+    manager = SkillManager(
+        registry,
+        SkillRouter(registry, ambiguity_margin=1.0),
+    )
+    llm = _CaptureLLM()
+    agent = Agent(llm=llm, tools=[get_tool("read_file")], skills=manager, replay=False)
+
+    answer = await agent.chat("fix alpha deployment")
+
+    assert answer == manager.last_result.clarification
+    assert manager.last_result.decision == "clarify"
+    assert llm.calls == []
+
+
+@pytest.mark.asyncio
+async def test_high_risk_skill_blocks_state_change_without_confirmation(tmp_path):
+    _write_skill(
+        tmp_path,
+        schema_version=2,
+        routing={"allow_implicit": True, "risk": "high", "rollout_percent": 100},
+    )
+    registry = _registry(tmp_path)
+    manager = SkillManager(registry, SkillRouter(registry))
+    agent = Agent(
+        llm=_CaptureLLM(),
+        tools=[get_tool("write_file")],
+        skills=manager,
+        replay=False,
+    )
+    agent._load_skill_context("Use $test.alpha")
+
+    class _TC:
+        def __init__(self):
+            self.name = "write_file"
+            self.arguments = {
+                "file_path": str(tmp_path / "blocked.txt"),
+                "content": "blocked",
+            }
+
+    result, _, success = await agent._exec_tool(_TC())
+    assert not success
+    assert "high risk" in result
+    assert not (tmp_path / "blocked.txt").exists()
+
+
+def test_routing_context_recall_and_required_context_gate(tmp_path):
+    _write_skill(
+        tmp_path,
+        schema_version=2,
+        signature={
+            "domains": ["document"],
+            "actions": ["review"],
+            "objects": ["contract"],
+            "artifacts": ["docx"],
+            "outputs": ["reviewed contract"],
+            "constraints": [],
+            "contexts": ["attachment"],
+        },
+        requires={"context_any": ["attachment"], "inputs_any": ["contract_file"]},
+    )
+    router = SkillRouter(_registry(tmp_path))
+
+    missing = router.route("review the contract")
+    present = router.route(
+        "review the contract",
+        context=RoutingContext(
+            attachments=["contract.docx"],
+            inputs={"contract_file"},
+        ),
+    )
+
+    assert missing.selected_ids == []
+    assert present.selected_ids == ["test.alpha"]
+    assert present.signature.artifacts >= {"docx"}
+    assert present.signature.contexts >= {"attachment", "contract_file"}
+
+
+def test_matching_resource_mode_loads_only_its_reference_and_paths(tmp_path):
+    directory = _write_skill(
+        tmp_path,
+        schema_version=2,
+        resource_modes=[
+            {
+                "id": "redline",
+                "when": ["tracked changes"],
+                "references": ["references/redlining.md"],
+                "scripts": ["scripts/redline.py"],
+                "assets": [],
+            },
+            {
+                "id": "plain",
+                "when": ["plain rewrite"],
+                "references": ["references/plain.md"],
+                "scripts": [],
+                "assets": [],
+            },
+        ],
+    )
+    (directory / "references").mkdir()
+    (directory / "scripts").mkdir()
+    (directory / "references" / "redlining.md").write_text("REDLINE RULES", encoding="utf-8")
+    (directory / "references" / "plain.md").write_text("PLAIN RULES", encoding="utf-8")
+    (directory / "scripts" / "redline.py").write_text("print('safe')", encoding="utf-8")
+
+    result = SkillRouter(_registry(tmp_path)).route(
+        "Use $test.alpha with tracked changes"
+    )
+    assert "REDLINE RULES" in result.prompt
+    assert "redline.py" in result.prompt
+    assert "PLAIN RULES" not in result.prompt
+
+
+def test_semantic_recall_can_supply_a_candidate_without_lexical_overlap(tmp_path):
+    _write_skill(tmp_path, schema_version=2)
+    router = SkillRouter(
+        _registry(tmp_path),
+        semantic_scorer=lambda _query, skill: 0.95 if skill.manifest.id == "test.alpha" else 0,
+    )
+    result = router.route("completely unrelated vocabulary")
+    assert result.selected_ids == ["test.alpha"]
+    assert any("semantic recall" in reason for reason in result.candidates[0].reasons)
+
+
+def test_superseded_skill_routes_to_active_successor(tmp_path):
+    _write_skill(tmp_path, "test.old")
+    _write_skill(
+        tmp_path,
+        "test.new",
+        schema_version=2,
+        name="Replacement",
+        summary="Replacement workflow.",
+        tags=["replacement"],
+        intents=["replacement workflow"],
+        examples={"positive": [], "negative": []},
+        relations={"dependencies": [], "composes_with": [], "supersedes": ["test.old"]},
+    )
+    result = SkillRouter(_registry(tmp_path)).route("fix alpha deployment")
+    assert result.selected_ids == ["test.new"]
+    assert any("superseded by test.new" in reason for reason in result.rejected)
+
+
+def test_project_skill_lifecycle_transition_is_validated_and_audited(tmp_path):
+    _write_skill(tmp_path)
+    registry = _registry(tmp_path)
+    manager = SkillManager(registry, SkillRouter(registry))
+
+    manager.transition("test.alpha", "deprecated", "replaced after regression review")
+
+    skill = manager.registry.get("test.alpha")
+    assert skill.manifest.status == "deprecated"
+    assert skill.manifest.lifecycle.previous_status == "active"
+    assert "regression review" in skill.manifest.lifecycle.reason
+    assert (skill.path / ".lifecycle.jsonl").is_file()
+    with pytest.raises(ValueError, match="invalid skill lifecycle transition"):
+        manager.transition("test.alpha", "candidate", "invalid backwards jump")
+
+
+def test_evaluation_reports_confidence_ux_latency_and_success_metrics(tmp_path):
+    _write_skill(tmp_path)
+    metrics = evaluate_router(
+        SkillRouter(_registry(tmp_path)),
+        [
+            RoutingCase(
+                query="fix alpha deployment",
+                expected_skill="test.alpha",
+                task_succeeded=True,
+                high_risk_confirmed=True,
+            ),
+            RoutingCase(
+                query="tell me a joke",
+                expected_decision="abstain",
+                user_overrode=True,
+                task_succeeded=False,
+            ),
+        ],
+    )
+    assert metrics.precision_at_1 == 1.0
+    assert metrics.overall_accuracy == 1.0
+    assert metrics.user_override_rate == 0.5
+    assert metrics.task_success_rate == 0.5
+    assert metrics.high_risk_confirmation_rate == 1.0
+    assert metrics.p95_routing_latency_ms >= 0
+    assert metrics.average_top1_top2_margin > 0
+
+
+def test_v2_confidence_thresholds_reject_or_clarify_weak_matches(tmp_path):
+    manager = SkillManager.create(project_path=tmp_path, user_dir=tmp_path / "user")
+    tools = {"read_file", "grep", "glob", "bash", "write_file", "edit_file", "edit_ast"}
+    ambiguous = manager.route("API", tools)
+    weak = manager.route("Tell me a joke about test coverage", tools)
+
+    assert ambiguous.decision == "clarify"
+    assert ambiguous.selected_ids == []
+    assert weak.decision == "abstain"
+
+
+def test_required_permissions_are_a_hard_gate_even_for_explicit_skill(tmp_path):
+    _write_skill(
+        tmp_path,
+        schema_version=2,
+        requires={"context_any": [], "inputs_any": [], "permissions": ["drive.write"]},
+    )
+    router = SkillRouter(_registry(tmp_path))
+    denied = router.route("Use $test.alpha")
+    allowed = router.route(
+        "Use $test.alpha",
+        context=RoutingContext(granted_permissions={"drive.write"}),
+    )
+    assert denied.selected_ids == []
+    assert any("missing required permissions" in reason for reason in denied.rejected)
+    assert allowed.selected_ids == ["test.alpha"]
+
+
+def test_dependency_version_mismatch_blocks_activation_and_is_audited(tmp_path):
+    _write_skill(tmp_path, "test.atomic", version="2.0.0")
+    _write_skill(
+        tmp_path,
+        "test.workflow",
+        relations={
+            "dependencies": ["test.atomic"],
+            "dependency_versions": {"test.atomic": "1.0.0"},
+            "composes_with": [],
+            "supersedes": [],
+        },
+    )
+    router = SkillRouter(_registry(tmp_path))
+    result = router.route("Use $test.workflow")
+    assert result.selected_ids == []
+    assert any("requires version 1.0.0" in reason for reason in result.rejected)
+    assert any(issue.code == "dependency-version-mismatch" for issue in router.catalog.issues)
+
+
+def test_historical_failure_penalty_can_change_automatic_ranking(tmp_path):
+    _write_skill(tmp_path, "test.alpha", priority=10)
+    _write_skill(tmp_path, "test.beta")
+    baseline = SkillRouter(_registry(tmp_path)).route("fix alpha deployment")
+    penalized = SkillRouter(
+        _registry(tmp_path),
+        failure_penalties={"test.alpha": 0.3},
+    ).route("fix alpha deployment")
+    assert baseline.selected_ids[0] == "test.alpha"
+    assert penalized.selected_ids[0] == "test.beta"
+    alpha = next(
+        candidate
+        for candidate in penalized.candidates
+        if candidate.skill.manifest.id == "test.alpha"
+    )
+    assert any("historical failure penalty" in reason for reason in alpha.reasons)

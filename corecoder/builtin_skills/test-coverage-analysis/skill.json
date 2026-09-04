@@ -1,1 +1,136 @@
-{"schema_version":1,"id":"testing.coverage-analysis","name":"Test Coverage Analysis","version":"1.0.0","summary":"Assess meaningful behavioral coverage and identify high-risk untested paths without writing tests.","category":["testing","analysis","quality"],"tags":["test coverage","coverage gap","untested","覆盖率分析","测试缺口"],"aliases":["analyze coverage","分析测试覆盖"],"intents":["find missing test coverage","分析哪些逻辑缺少测试"],"applies_when":["The user asks for a coverage assessment or test plan rather than implementation."],"not_when":["write tests","failing tests","编写测试","测试失败"],"examples":{"positive":["Analyze the highest-risk gaps in our test coverage","分析当前测试覆盖中风险最高的缺口"],"negative":["Add unit tests for this module","修复失败测试"]},"tools":{"required":["read_file","grep"],"recommended":["glob"],"forbidden":["write_file","edit_file","edit_ast","bash","undo_changes"]},"exclusive_group":"analysis-mode","token_budget":900,"status":"active"}
+{
+  "schema_version": 2,
+  "id": "testing.coverage-analysis",
+  "name": "Test Coverage Analysis",
+  "version": "1.0.0",
+  "summary": "Assess meaningful behavioral coverage and identify high-risk untested paths without writing tests.",
+  "layer": "workflow",
+  "category": [
+    "testing",
+    "analysis",
+    "quality"
+  ],
+  "tags": [
+    "test coverage",
+    "coverage gap",
+    "untested",
+    "覆盖率分析",
+    "测试缺口"
+  ],
+  "aliases": [
+    "analyze coverage",
+    "分析测试覆盖"
+  ],
+  "intents": [
+    "find missing test coverage",
+    "分析哪些逻辑缺少测试"
+  ],
+  "signature": {
+    "domains": [
+      "testing",
+      "analysis",
+      "quality"
+    ],
+    "actions": [
+      "analyze",
+      "analyzes",
+      "analyzing",
+      "analysis",
+      "分析",
+      "assess",
+      "assesses",
+      "assessing",
+      "assessment",
+      "评估"
+    ],
+    "objects": [
+      "test coverage",
+      "coverage gap",
+      "untested code",
+      "risk gap",
+      "覆盖率",
+      "测试缺口"
+    ],
+    "artifacts": [
+      "coverage report",
+      "test suite"
+    ],
+    "outputs": [
+      "coverage report",
+      "risk list"
+    ],
+    "constraints": [
+      "read only",
+      "without writing tests"
+    ]
+  },
+  "applies_when": [
+    "The user asks for a coverage assessment or test plan rather than implementation."
+  ],
+  "not_when": [
+    "write tests",
+    "failing tests",
+    "编写测试",
+    "测试失败"
+  ],
+  "examples": {
+    "positive": [
+      "Analyze the highest-risk gaps in our test coverage",
+      "找出覆盖率缺口和高风险未测试路径",
+      "分析当前测试覆盖中风险最高的缺口"
+    ],
+    "negative": [
+      "Add unit tests for the parser edge cases",
+      "编写测试",
+      "Add unit tests for this module",
+      "修复失败测试"
+    ],
+    "hard_negative": [
+      "Add unit tests for the parser edge cases",
+      "The GitHub Actions build fails only in CI; diagnose it"
+    ],
+    "contrastive": [
+      {
+        "query": "Add unit tests for the parser edge cases",
+        "expected_skill": "testing.test-generation",
+        "reason": "Producing tests is test generation; this skill only assesses gaps."
+      },
+      {
+        "query": "Add integration tests for the API and database transaction",
+        "expected_skill": "testing.integration-test-generation",
+        "reason": "Cross-boundary test authoring is integration test generation."
+      }
+    ]
+  },
+  "tools": {
+    "required": [
+      "read_file",
+      "grep"
+    ],
+    "recommended": [
+      "glob"
+    ],
+    "forbidden": [
+      "write_file",
+      "edit_file",
+      "edit_ast",
+      "bash",
+      "undo_changes"
+    ]
+  },
+  "relations": {
+    "dependencies": [],
+    "composes_with": [
+      "testing.test-generation"
+    ],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "low",
+    "rollout_percent": 100
+  },
+  "exclusive_group": "analysis-mode",
+  "token_budget": 900,
+  "status": "active"
+}

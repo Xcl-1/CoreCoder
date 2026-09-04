@@ -1,1 +1,132 @@
-{"schema_version":1,"id":"coding.api-design","name":"API Contract Design","version":"1.0.0","summary":"Design clear HTTP or library API contracts, schemas, errors, pagination, and versioning before implementation.","category":["coding","api","design"],"tags":["API design","REST","contract","接口设计","API 设计"],"aliases":["design API","设计接口"],"intents":["design an API contract","设计 API 接口"],"applies_when":["The user requests an API contract or design decision."],"not_when":["implement API","migrate API","实现接口","迁移接口"],"examples":{"positive":["Design a versioned REST API for project search","设计一个支持分页的项目查询 API"],"negative":["Implement this existing endpoint","把 API v1 迁移到 v2"]},"tools":{"required":["read_file","grep"],"recommended":["glob"],"forbidden":["write_file","edit_file","edit_ast","bash","undo_changes"]},"exclusive_group":"design-mode","token_budget":900,"status":"active"}
+{
+  "schema_version": 2,
+  "id": "coding.api-design",
+  "name": "API Contract Design",
+  "version": "1.0.0",
+  "summary": "Design clear HTTP or library API contracts, schemas, errors, pagination, and versioning before implementation.",
+  "layer": "workflow",
+  "category": [
+    "coding",
+    "api",
+    "design"
+  ],
+  "tags": [
+    "API design",
+    "REST",
+    "contract",
+    "接口设计",
+    "API 设计"
+  ],
+  "aliases": [
+    "design API",
+    "设计接口"
+  ],
+  "intents": [
+    "design an API contract",
+    "设计 API 接口"
+  ],
+  "signature": {
+    "domains": [
+      "coding",
+      "api",
+      "design"
+    ],
+    "actions": [
+      "design",
+      "designs",
+      "designing",
+      "设计"
+    ],
+    "objects": [
+      "api",
+      "rest",
+      "endpoint",
+      "contract",
+      "schema",
+      "接口",
+      "端点",
+      "契约"
+    ],
+    "artifacts": [
+      "openapi",
+      "http api"
+    ],
+    "outputs": [
+      "api contract",
+      "design decision",
+      "接口设计"
+    ],
+    "constraints": [
+      "read only",
+      "before implementation"
+    ]
+  },
+  "applies_when": [
+    "The user requests an API contract or design decision."
+  ],
+  "not_when": [
+    "implement API",
+    "migrate API",
+    "实现接口",
+    "迁移接口"
+  ],
+  "examples": {
+    "positive": [
+      "Design a versioned REST API for project search",
+      "设计一个支持分页的项目查询 API"
+    ],
+    "negative": [
+      "Implement the export API endpoint now",
+      "实现导出接口",
+      "Implement this existing endpoint",
+      "把 API v1 迁移到 v2"
+    ],
+    "hard_negative": [
+      "Migrate all API consumers from v1 to v2",
+      "Review the API implementation for correctness"
+    ],
+    "contrastive": [
+      {
+        "query": "Migrate our API consumers from v1 to v2 without downtime",
+        "expected_skill": "coding.api-migration",
+        "reason": "Changing existing API versions is migration, not contract design."
+      },
+      {
+        "query": "Design the commands and flags for the new project manager",
+        "expected_skill": "coding.cli-design",
+        "reason": "Command-line surface design belongs to the CLI design skill."
+      }
+    ]
+  },
+  "tools": {
+    "required": [
+      "read_file",
+      "grep"
+    ],
+    "recommended": [
+      "glob"
+    ],
+    "forbidden": [
+      "write_file",
+      "edit_file",
+      "edit_ast",
+      "bash",
+      "undo_changes"
+    ]
+  },
+  "relations": {
+    "dependencies": [],
+    "composes_with": [
+      "coding.feature-implementation"
+    ],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "low",
+    "rollout_percent": 100
+  },
+  "exclusive_group": "design-mode",
+  "token_budget": 900,
+  "status": "active"
+}

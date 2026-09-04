@@ -39,7 +39,7 @@ from .tools.changes import ChangeTracker, bind_change_tracker, reset_change_trac
 if TYPE_CHECKING:
     from .memory import MemoryEngine, MemoryWorker
     from .security import Guard
-    from .skills import SkillManager
+    from .skills import RouteResult, RoutingContext, SkillManager
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +135,7 @@ class Agent:
         self.skills = skills
         self._skill_prompt = ""
         self._skill_forbidden_tools: set[str] = set()
+        self._active_skill_risk = "low"
         self.changes = changes or ChangeTracker()
         self.session_id = session_id or self._new_session_id()
 
@@ -211,11 +212,16 @@ class Agent:
 
     async def chat(self, user_input: str,
                    on_token: Callable[[str], None] | None = None,
-                   on_tool: Callable[[str, dict[str, Any]], None] | None = None) -> str:
+                   on_tool: Callable[[str, dict[str, Any]], None] | None = None,
+                   routing_context: RoutingContext | dict | None = None) -> str:
         """Process one user message. May involve multiple LLM/tool rounds."""
-        self._load_skill_context(user_input)
+        route_result = self._load_skill_context(user_input, routing_context)
         self._load_memory_context(user_input)
         self.messages.append({"role": "user", "content": user_input})
+        if route_result is not None and route_result.needs_clarification:
+            answer = route_result.clarification
+            self.messages.append({"role": "assistant", "content": answer})
+            return answer
         await asyncio.to_thread(self.context.maybe_compress, self.messages, self.llm)
 
         for _ in range(self.max_rounds):
@@ -314,17 +320,61 @@ class Agent:
             return f"Error: active skill policy forbids tool '{tc.name}'", 0, False
         # validate arguments first so a TypeError raised *inside* the tool isn't
         # mislabelled as a bad-arguments error from the caller
+        properties = set(tool.parameters.get("properties", {}))
+        required = set(tool.parameters.get("required", ()))
+        unknown = set(tc.arguments) - properties
+        missing = required - set(tc.arguments)
+        argument_errors: list[str] = []
+        if unknown:
+            argument_errors.append(f"unexpected: {', '.join(sorted(unknown))}")
+        if missing:
+            argument_errors.append(f"missing: {', '.join(sorted(missing))}")
+        if argument_errors:
+            expected = ", ".join(sorted(properties)) or "no arguments"
+            message = (
+                f"Error: bad arguments for {tc.name}: {'; '.join(argument_errors)}; "
+                f"expected: {expected}"
+            )
+            return (
+                message,
+                0,
+                False,
+            )
+        validation_target = (
+            tool._execute_sync if type(tool).execute is Tool.execute else tool.execute
+        )
         try:
-            inspect.signature(tool.execute).bind(**tc.arguments)
+            inspect.signature(validation_target).bind(**tc.arguments)
         except TypeError as e:
             logger.debug("Bad arguments for %s: %s", tc.name, e)
             return f"Error: bad arguments for {tc.name}: {e}", 0, False
 
         # ---- security review ----
+        security_confirmed = False
         if self.guard is not None:
             decision = self.guard.review(tc.name, tc.arguments)
             if not decision.allowed:
                 return f"[Security] Blocked: {decision.reason}", 0, False
+            security_confirmed = decision.user_confirmed
+        if (
+            self._active_skill_risk == "high"
+            and tool.side_effect != "none"
+            and not security_confirmed
+        ):
+            reason = (
+                "The active skill is high risk and this tool may change state; "
+                "explicit confirmation is required before execution"
+            )
+            if self.guard is None:
+                return f"[Security] Blocked: {reason}", 0, False
+            confirmation = self.guard.request_confirmation(
+                tc.name,
+                tc.arguments,
+                reason,
+                source="skill-risk",
+            )
+            if not confirmation.allowed:
+                return f"[Security] Blocked: {confirmation.reason}", 0, False
 
         t0 = time.monotonic()
         tracker_token = bind_change_tracker(self.changes)
@@ -482,18 +532,39 @@ class Agent:
             logger.warning("Failed to retrieve cross-session memory", exc_info=True)
             self._memory_prompt = ""
 
-    def _load_skill_context(self, user_input: str) -> None:
+    def _load_skill_context(
+        self,
+        user_input: str,
+        routing_context: RoutingContext | dict | None = None,
+    ) -> RouteResult | None:
         """Route and activate skills for exactly one user turn."""
         self._skill_prompt = ""
         self._skill_forbidden_tools.clear()
+        self._active_skill_risk = "low"
         if self.skills is None:
-            return
+            return None
         try:
-            result = self.skills.route(user_input, {tool.name for tool in self.tools})
+            result = self.skills.route(
+                user_input,
+                {tool.name for tool in self.tools},
+                context=routing_context,
+            )
             self._skill_prompt = result.prompt
             self._skill_forbidden_tools = result.forbidden_tools
+            risk_order = {"low": 0, "medium": 1, "high": 2}
+            route_risks = [result.signature.risk]
+            route_risks.extend(
+                item.skill.manifest.routing.risk for item in result.selected
+            )
+            if route_risks:
+                self._active_skill_risk = max(
+                    route_risks,
+                    key=risk_order.__getitem__,
+                )
+            return result
         except Exception:
             logger.warning("Failed to route task skills", exc_info=True)
+            return None
 
     def checkpoint_memory(self) -> None:
         """Durably queue the latest turn, then schedule non-blocking learning."""
@@ -681,10 +752,18 @@ Plan (JSON only):"""
             routed = self.skills.last_result
             skill_route = {
                 "selected": routed.selected_ids,
+                "decision": routed.decision,
+                "confidence": routed.confidence,
+                "margin": routed.margin,
+                "clarification": routed.clarification,
+                "signature": routed.signature.model_dump(mode="json"),
                 "candidates": [
                     {
                         "id": item.skill.manifest.id,
                         "score": item.score,
+                        "recall_score": item.recall_score,
+                        "confidence": item.confidence,
+                        "shadow": item.shadow,
                         "reasons": item.reasons,
                     }
                     for item in routed.candidates

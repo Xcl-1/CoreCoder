@@ -1,25 +1,132 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "coding.code-review",
   "name": "Code Review",
   "version": "1.0.0",
-  "summary": "Review an existing change for correctness, regressions, security, and missing tests.",
-  "category": ["coding", "quality", "review"],
-  "tags": ["code review", "review", "审查", "代码审查", "regression"],
-  "aliases": ["review changes", "检查代码"],
-  "intents": ["review this code", "review these changes", "代码审查", "检查这次修改"],
-  "applies_when": ["The user asks to inspect existing code or a completed change."],
-  "not_when": ["implement feature", "实现功能"],
+  "summary": "Review an existing change for correctness, regressions, and missing tests.",
+  "layer": "workflow",
+  "category": [
+    "coding",
+    "quality",
+    "review"
+  ],
+  "tags": [
+    "code review",
+    "review",
+    "审查",
+    "代码审查",
+    "regression"
+  ],
+  "aliases": [
+    "review changes",
+    "检查代码"
+  ],
+  "intents": [
+    "review this code",
+    "review these changes",
+    "代码审查",
+    "检查这次修改"
+  ],
+  "signature": {
+    "domains": [
+      "coding",
+      "quality",
+      "review"
+    ],
+    "actions": [
+      "review",
+      "reviews",
+      "reviewing",
+      "reviewed",
+      "inspect",
+      "inspects",
+      "inspecting",
+      "审查",
+      "检查"
+    ],
+    "objects": [
+      "code",
+      "change",
+      "changes",
+      "pull request",
+      "diff",
+      "代码",
+      "修改"
+    ],
+    "artifacts": [
+      "source code",
+      "diff"
+    ],
+    "outputs": [
+      "review findings"
+    ],
+    "constraints": [
+      "read only",
+      "no edits",
+      "只读"
+    ]
+  },
+  "applies_when": [
+    "The user asks to inspect existing code or a completed change."
+  ],
+  "not_when": [
+    "implement feature",
+    "实现功能",
+    "security",
+    "security audit",
+    "vulnerability",
+    "安全",
+    "安全审计"
+  ],
   "examples": {
-    "positive": ["Review this pull request for correctness and regressions", "请审查这次代码修改并列出问题"],
-    "negative": ["Implement the feature described in this issue", "直接修改代码实现这个功能"]
+    "positive": [
+      "Review this pull request for correctness and regressions",
+      "请审查这次代码修改并列出问题"
+    ],
+    "negative": [
+      "Implement the feature described in this issue",
+      "直接修改代码实现这个功能"
+    ],
+    "hard_negative": [
+      "Add a new capability",
+      "Fix this bug and edit the code"
+    ],
+    "contrastive": [
+      {
+        "query": "Implement the feature and modify the source code",
+        "expected_skill": "coding.feature-implementation",
+        "reason": "The requested outcome is implementation, not a read-only review."
+      }
+    ]
   },
   "tools": {
-    "required": ["read_file", "grep"],
-    "recommended": ["glob"],
-    "forbidden": ["write_file", "edit_file", "edit_ast", "bash", "agent", "undo_changes"]
+    "required": [
+      "read_file",
+      "grep"
+    ],
+    "recommended": [
+      "glob"
+    ],
+    "forbidden": [
+      "write_file",
+      "edit_file",
+      "edit_ast",
+      "bash",
+      "agent",
+      "undo_changes"
+    ]
   },
   "exclusive_group": "review-mode",
+  "relations": {
+    "dependencies": [],
+    "composes_with": [],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "low",
+    "rollout_percent": 100
+  },
   "token_budget": 900,
   "status": "active"
 }

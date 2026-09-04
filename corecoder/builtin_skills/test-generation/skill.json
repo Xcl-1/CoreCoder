@@ -1,25 +1,128 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "testing.test-generation",
   "name": "Test Generation",
   "version": "1.0.0",
   "summary": "Add focused automated tests for existing or newly requested behavior and meaningful edge cases.",
-  "category": ["coding", "testing", "quality"],
-  "tags": ["tests", "unit tests", "coverage", "测试生成", "补充测试", "覆盖率"],
-  "aliases": ["write tests", "add tests", "编写测试"],
-  "intents": ["add unit tests", "increase test coverage", "为这个模块补充测试", "编写测试用例"],
-  "applies_when": ["The user asks to create or expand automated tests."],
-  "not_when": ["existing tests are failing", "debug pytest", "已有测试失败", "排查测试报错"],
+  "layer": "workflow",
+  "category": [
+    "coding",
+    "testing",
+    "quality"
+  ],
+  "tags": [
+    "tests",
+    "unit tests",
+    "coverage",
+    "测试生成",
+    "补充测试",
+    "覆盖率"
+  ],
+  "aliases": [
+    "write tests",
+    "add tests",
+    "编写测试"
+  ],
+  "intents": [
+    "add unit tests",
+    "increase test coverage",
+    "为这个模块补充测试",
+    "编写测试用例"
+  ],
+  "signature": {
+    "domains": [
+      "testing",
+      "quality"
+    ],
+    "actions": [
+      "add",
+      "adds",
+      "adding",
+      "write",
+      "writes",
+      "writing",
+      "generate",
+      "generates",
+      "generating",
+      "补充",
+      "编写",
+      "生成"
+    ],
+    "objects": [
+      "test",
+      "tests",
+      "unit test",
+      "unit tests",
+      "edge case",
+      "edge cases",
+      "test case",
+      "test cases",
+      "测试",
+      "测试用例"
+    ],
+    "artifacts": [
+      "test suite"
+    ],
+    "outputs": [
+      "new tests"
+    ],
+    "constraints": [
+      "focused coverage"
+    ]
+  },
+  "applies_when": [
+    "The user asks to create or expand automated tests."
+  ],
+  "not_when": [
+    "existing tests are failing",
+    "debug pytest",
+    "已有测试失败",
+    "排查测试报错"
+  ],
   "examples": {
-    "positive": ["Add unit tests for the parser edge cases", "为解析器的边界情况补充单元测试"],
-    "negative": ["pytest is failing after the last change", "修复当前失败的测试"]
+    "positive": [
+      "Add unit tests for the parser edge cases",
+      "为解析器的边界情况补充单元测试"
+    ],
+    "negative": [
+      "pytest is failing after the last change",
+      "修复当前失败的测试"
+    ],
+    "hard_negative": [
+      "Diagnose why pytest currently fails"
+    ],
+    "contrastive": [
+      {
+        "query": "pytest fails with a traceback; find and fix the cause",
+        "expected_skill": "python.test-debug",
+        "reason": "An existing failure calls for debugging rather than test creation."
+      }
+    ]
   },
   "tools": {
-    "required": ["read_file", "grep"],
-    "recommended": ["glob", "write_file", "edit_file", "bash"],
+    "required": [
+      "read_file",
+      "grep"
+    ],
+    "recommended": [
+      "glob",
+      "write_file",
+      "edit_file",
+      "bash"
+    ],
     "forbidden": []
   },
   "exclusive_group": "python-test-workflow",
+  "relations": {
+    "dependencies": [],
+    "composes_with": [],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "medium",
+    "rollout_percent": 100
+  },
   "token_budget": 900,
   "status": "active"
 }

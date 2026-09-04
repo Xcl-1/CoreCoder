@@ -1,1 +1,139 @@
-{"schema_version":1,"id":"data.database-migration","name":"Database Schema Migration","version":"1.0.0","summary":"Plan and implement reversible database schema and data migrations with compatibility and rollout checks.","category":["data","database","migration"],"tags":["database migration","schema change","SQL migration","数据库迁移","表结构变更"],"aliases":["migrate database","数据库升级"],"intents":["create a database migration","执行数据库表结构迁移"],"applies_when":["A persisted database schema or stored data representation must change."],"not_when":["API migration","analyze data quality","API 迁移","数据质量分析"],"examples":{"positive":["Add a zero-downtime migration for this database column","为这个数据库字段编写零停机迁移"],"negative":["Migrate clients to API v2","检查 CSV 数据是否合法"]},"tools":{"required":["read_file","grep"],"recommended":["glob","write_file","edit_file","bash"],"forbidden":[]},"exclusive_group":"data-change-mode","token_budget":1100,"status":"active"}
+{
+  "schema_version": 2,
+  "id": "data.database-migration",
+  "name": "Database Schema Migration",
+  "version": "1.0.0",
+  "summary": "Plan and implement reversible database schema and data migrations with compatibility and rollout checks.",
+  "layer": "workflow",
+  "category": [
+    "data",
+    "database",
+    "migration"
+  ],
+  "tags": [
+    "database migration",
+    "schema change",
+    "SQL migration",
+    "数据库迁移",
+    "表结构变更"
+  ],
+  "aliases": [
+    "migrate database",
+    "数据库升级"
+  ],
+  "intents": [
+    "create a database migration",
+    "执行数据库表结构迁移"
+  ],
+  "signature": {
+    "domains": [
+      "data",
+      "database",
+      "migration"
+    ],
+    "actions": [
+      "migrate",
+      "migrates",
+      "migrating",
+      "migration",
+      "迁移",
+      "implement",
+      "implementing",
+      "add",
+      "adds",
+      "adding",
+      "实现",
+      "新增",
+      "添加"
+    ],
+    "objects": [
+      "database",
+      "schema",
+      "table",
+      "column",
+      "sql",
+      "数据库",
+      "表结构",
+      "字段"
+    ],
+    "artifacts": [
+      "sql",
+      "migration script",
+      "alembic"
+    ],
+    "outputs": [
+      "migration script",
+      "rollback plan"
+    ],
+    "constraints": [
+      "reversible",
+      "zero downtime"
+    ]
+  },
+  "applies_when": [
+    "A persisted database schema or stored data representation must change."
+  ],
+  "not_when": [
+    "API migration",
+    "analyze data quality",
+    "API 迁移",
+    "数据质量分析"
+  ],
+  "examples": {
+    "positive": [
+      "Add a zero-downtime migration for this database column",
+      "编写数据库字段零停机迁移",
+      "为这个数据库字段编写零停机迁移"
+    ],
+    "negative": [
+      "Migrate clients from API v1 to v2",
+      "API 版本迁移",
+      "Migrate clients to API v2",
+      "检查 CSV 数据是否合法"
+    ],
+    "hard_negative": [
+      "Add validation and error reporting for imported CSV records",
+      "Write a migration guide for users moving to the new schema"
+    ],
+    "contrastive": [
+      {
+        "query": "Migrate clients from API v1 to v2 without downtime",
+        "expected_skill": "coding.api-migration",
+        "reason": "API version changes route to API migration."
+      },
+      {
+        "query": "Write a migration guide from API v1 to v2",
+        "expected_skill": "docs.migration-guide",
+        "reason": "User-facing upgrade documentation is a migration guide."
+      }
+    ]
+  },
+  "tools": {
+    "required": [
+      "read_file",
+      "grep"
+    ],
+    "recommended": [
+      "glob",
+      "write_file",
+      "edit_file",
+      "bash"
+    ],
+    "forbidden": []
+  },
+  "relations": {
+    "dependencies": [],
+    "composes_with": [
+      "docs.migration-guide"
+    ],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "high",
+    "rollout_percent": 100
+  },
+  "exclusive_group": "data-change-mode",
+  "token_budget": 1100,
+  "status": "active"
+}

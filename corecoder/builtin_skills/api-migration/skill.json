@@ -1,1 +1,138 @@
-{"schema_version":1,"id":"coding.api-migration","name":"API Migration","version":"1.0.0","summary":"Migrate API producers and consumers while preserving compatibility through staged, verified changes.","category":["coding","api","migration"],"tags":["API migration","version upgrade","compatibility","接口迁移","版本迁移"],"aliases":["migrate API","升级接口"],"intents":["migrate API v1 to v2","迁移 API 版本"],"applies_when":["An existing API contract or its consumers must change versions."],"not_when":["design a new API","general feature","设计新接口","普通功能开发"],"examples":{"positive":["Migrate clients from API v1 to v2 without downtime","将调用方从 API v1 平滑迁移到 v2"],"negative":["Design a new search endpoint","修复接口返回 500"]},"tools":{"required":["read_file","grep"],"recommended":["glob","edit_file","edit_ast","bash"],"forbidden":[]},"exclusive_group":"implementation-mode","token_budget":1100,"status":"active"}
+{
+  "schema_version": 2,
+  "id": "coding.api-migration",
+  "name": "API Migration",
+  "version": "1.0.0",
+  "summary": "Migrate API producers and consumers while preserving compatibility through staged, verified changes.",
+  "layer": "workflow",
+  "category": [
+    "coding",
+    "api",
+    "migration"
+  ],
+  "tags": [
+    "API migration",
+    "version upgrade",
+    "compatibility",
+    "接口迁移",
+    "版本迁移"
+  ],
+  "aliases": [
+    "migrate API",
+    "升级接口"
+  ],
+  "intents": [
+    "migrate API v1 to v2",
+    "迁移 API 版本"
+  ],
+  "signature": {
+    "domains": [
+      "coding",
+      "api",
+      "migration"
+    ],
+    "actions": [
+      "migrate",
+      "migrates",
+      "migrating",
+      "migration",
+      "迁移",
+      "upgrade",
+      "upgrades",
+      "upgrading",
+      "update",
+      "updating",
+      "升级",
+      "更新"
+    ],
+    "objects": [
+      "api",
+      "endpoint",
+      "consumer",
+      "client",
+      "version",
+      "接口",
+      "版本",
+      "调用方"
+    ],
+    "artifacts": [
+      "http api",
+      "openapi",
+      "client code"
+    ],
+    "outputs": [
+      "migrated code",
+      "compatibility shim"
+    ],
+    "constraints": [
+      "backward compatible",
+      "staged rollout",
+      "without downtime"
+    ]
+  },
+  "applies_when": [
+    "An existing API contract or its consumers must change versions."
+  ],
+  "not_when": [
+    "design a new API",
+    "general feature",
+    "设计新接口",
+    "普通功能开发"
+  ],
+  "examples": {
+    "positive": [
+      "Migrate clients from API v1 to v2 without downtime",
+      "将调用方从 API v1 平滑迁移到 v2"
+    ],
+    "negative": [
+      "Design a brand new API contract",
+      "设计新的 API 接口",
+      "Design a new search endpoint",
+      "修复接口返回 500"
+    ],
+    "hard_negative": [
+      "Add a zero-downtime migration for this database column",
+      "Write a migration guide from API v1 to v2 for users"
+    ],
+    "contrastive": [
+      {
+        "query": "Write a migration guide from API v1 to v2",
+        "expected_skill": "docs.migration-guide",
+        "reason": "Documenting an upgrade path for users is documentation work."
+      },
+      {
+        "query": "Add a zero-downtime migration for this database column",
+        "expected_skill": "data.database-migration",
+        "reason": "Persisted schema changes belong to database migration."
+      }
+    ]
+  },
+  "tools": {
+    "required": [
+      "read_file",
+      "grep"
+    ],
+    "recommended": [
+      "glob",
+      "edit_file",
+      "edit_ast",
+      "bash"
+    ],
+    "forbidden": []
+  },
+  "relations": {
+    "dependencies": [],
+    "composes_with": [
+      "quality.backward-compatibility"
+    ],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "medium",
+    "rollout_percent": 100
+  },
+  "exclusive_group": "implementation-mode",
+  "token_budget": 1100,
+  "status": "active"
+}

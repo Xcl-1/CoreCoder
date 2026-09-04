@@ -1,1 +1,134 @@
-{"schema_version":1,"id":"debugging.configuration","name":"Configuration Debugging","version":"1.0.0","summary":"Trace configuration sources, precedence, parsing, defaults, and environment-specific failures.","category":["debugging","configuration","operations"],"tags":["configuration","environment variable","dotenv","配置排错","环境变量"],"aliases":["debug config","配置问题"],"intents":["find why configuration is not loaded","排查配置未生效"],"applies_when":["Behavior differs because configuration is missing, malformed, or overridden."],"not_when":["design new config feature","deployment failure unrelated to config","新增配置功能","非配置部署故障"],"examples":{"positive":["Find why this environment variable is ignored","排查为什么环境变量没有生效"],"negative":["Add a new configuration option","部署后服务无法连接数据库"]},"tools":{"required":["read_file","grep"],"recommended":["glob","bash","edit_file"],"forbidden":[]},"conflicts_with":["coding.bug-fix"],"exclusive_group":"debugging-specialist","token_budget":900,"status":"active"}
+{
+  "schema_version": 2,
+  "id": "debugging.configuration",
+  "name": "Configuration Debugging",
+  "version": "1.0.0",
+  "summary": "Trace configuration sources, precedence, parsing, defaults, and environment-specific failures.",
+  "layer": "workflow",
+  "category": [
+    "debugging",
+    "configuration",
+    "operations"
+  ],
+  "tags": [
+    "configuration",
+    "environment variable",
+    "dotenv",
+    "配置排错",
+    "环境变量"
+  ],
+  "aliases": [
+    "debug config",
+    "配置问题"
+  ],
+  "intents": [
+    "find why configuration is not loaded",
+    "排查配置未生效"
+  ],
+  "signature": {
+    "domains": [
+      "debugging",
+      "configuration",
+      "operations"
+    ],
+    "actions": [
+      "diagnose",
+      "diagnosing",
+      "debug",
+      "debugging",
+      "排查",
+      "定位",
+      "诊断",
+      "trace",
+      "traces",
+      "追踪"
+    ],
+    "objects": [
+      "configuration",
+      "environment variable",
+      "dotenv",
+      "settings",
+      "default value",
+      "precedence",
+      "配置",
+      "环境变量"
+    ],
+    "artifacts": [
+      ".env",
+      "config file",
+      "toml",
+      "yaml"
+    ],
+    "outputs": [
+      "root cause",
+      "configuration fix"
+    ],
+    "constraints": []
+  },
+  "applies_when": [
+    "Behavior differs because configuration is missing, malformed, or overridden."
+  ],
+  "not_when": [
+    "design new config feature",
+    "deployment failure unrelated to config",
+    "新增配置功能",
+    "非配置部署故障"
+  ],
+  "examples": {
+    "positive": [
+      "Find why this environment variable is ignored",
+      "排查环境变量为什么没有生效",
+      "排查为什么环境变量没有生效"
+    ],
+    "negative": [
+      "Design a new configuration system",
+      "设计新的配置功能",
+      "Add a new configuration option",
+      "部署后服务无法连接数据库"
+    ],
+    "hard_negative": [
+      "The service is unhealthy after deployment; find the cause",
+      "Audit this repository for exposed credentials and unsafe secret logging"
+    ],
+    "contrastive": [
+      {
+        "query": "The service is unhealthy after deployment; find the cause",
+        "expected_skill": "devops.deployment-troubleshooting",
+        "reason": "Deployed runtime failures route to deployment troubleshooting."
+      },
+      {
+        "query": "Audit this repository for exposed credentials and unsafe secret logging",
+        "expected_skill": "security.secrets-audit",
+        "reason": "Credential exposure is a secrets audit."
+      }
+    ]
+  },
+  "tools": {
+    "required": [
+      "read_file",
+      "grep"
+    ],
+    "recommended": [
+      "glob",
+      "bash",
+      "edit_file"
+    ],
+    "forbidden": []
+  },
+  "conflicts_with": [
+    "coding.bug-fix"
+  ],
+  "relations": {
+    "dependencies": [],
+    "composes_with": [],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "medium",
+    "rollout_percent": 100
+  },
+  "exclusive_group": "debugging-specialist",
+  "token_budget": 900,
+  "status": "active"
+}

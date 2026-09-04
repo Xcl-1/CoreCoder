@@ -6,6 +6,10 @@ from .changes import current_change_tracker
 
 class UndoChangesTool(Tool):
     name = "undo_changes"
+    input_types = ("tracked_changes",)
+    output_type = "undo_result"
+    permission_scope = "filesystem:write"
+    side_effect = "local_write"
     description = (
         "Undo all file changes made through CoreCoder write/edit tools in the current session. "
         "Only use when the user explicitly asks to undo or revert the current changes. "

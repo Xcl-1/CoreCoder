@@ -187,7 +187,7 @@ README 只给方向，每条的代码细节第七篇接着讲。挑一个动手�
 /memory          查看跨会话记忆和待反思会话
 /memory show <id> / search <查询> / archive <id> / approve <id> / reflect
 /skills          列出内置、用户和项目 Skill
-/skill search <查询> / show <id> / use <id> / unuse <id> / explain
+/skill search <查询> / show <id> / use <id> / unuse <id> / explain / audit
 quit / exit      退出（Ctrl+C 取消当前回合）
 ```
 
@@ -201,9 +201,46 @@ quit / exit      退出（Ctrl+C 取消当前回合）
 
 ### Skill
 
-Skill 是构建在原子 Tool 之上的可复用任务指导。CoreCoder 会发现包内置 Skill、`~/.corecoder/skills` 下的用户 Skill，以及项目 `.corecoder/skills` 下的项目 Skill；同一 ID 按项目、用户、内置的顺序覆盖。每个 Skill 包含一份轻量 `skill.json` 元信息和完整 `SKILL.md` 指令。路由先根据 ID、标签、意图、别名、适用边界和正反例粗召回，再结合任务匹配、作用域、Tool 可用性、冲突和 Prompt 成本精排，只有最终选中的完整指令会进入模型上下文。可以在请求中写 `$skill.id` 或使用 `/skill use <id>` 显式启用，并通过 `/skill explain` 查看上一轮路由原因。Skill 只能收紧 Tool 范围，所有执行仍需经过原有安全检查。
+Skill 是构建在原子 Tool 之上的可复用任务指导，分为 `atomic`、`workflow` 和 `orchestrator` 三层。CoreCoder 会发现包内置 Skill、`~/.corecoder/skills` 下的用户 Skill，以及项目 `.corecoder/skills` 下的项目 Skill；同一 ID 按项目、用户、内置的顺序覆盖。每个 Skill 包含一份轻量 `skill.json` Catalog 元信息和完整 `SKILL.md` 指令。
 
-设置 `CORECODER_SKILLS=0` 可关闭路由；`CORECODER_SKILLS_DIR`、`CORECODER_SKILL_TOP_K`、`CORECODER_SKILL_MAX_ACTIVE` 和 `CORECODER_SKILL_PROMPT_CHARS` 分别控制用户目录和路由预算。
+路由采用“2+1”渐进加载：轻量内存 Catalog 合并精确、标签/签名、上下文、对比例和可选语义召回，只保留少量候选；随后结合正例、硬负例、Tool/输入/上下文/权限前置条件、依赖/冲突、历史失败惩罚、作用域和 Prompt 成本精排；最后只加载选中 Skill 的 `SKILL.md`。清单可用 `resource_modes` 声明模式级资源，使系统只读取本次命中的 reference，并只暴露对应 script/asset 路径。默认仅自动选择一个主 Skill和最多两个辅助 Skill，辅助 Skill 必须通过 `dependencies` 或 `composes_with` 明确建立关系。
+
+路由结果分为 `explicit`、`auto`、`clarify` 和 `abstain`。v2 高置信度且差值充分时自动启用；中置信度或候选接近时直接返回一个澄清问题，不调用 LLM、也不暴露 Tool；匹配过弱时不强行加载 Skill。请求中的 `$skill.id` 或 `/skill use <id>` 可以显式启用，`不要使用 $skill.id` 可只在当前回合排除它。通过 `/skill explain` 查看召回分、精排分、置信度、任务签名和拒绝原因，通过 `/skill audit` 查看缺失、循环、矛盾、替代和高重叠关系。Skill 只能收紧 Tool 范围；高风险 Skill 在首次有副作用的 Tool 前强制确认，并继续经过原有安全检查。
+
+`skill.json` v2 可渐进增加以下字段；v1 清单保持兼容：
+
+```json
+{
+  "schema_version": 2,
+  "layer": "workflow",
+  "signature": {
+    "domains": ["testing"],
+    "actions": ["debug", "修复"],
+    "objects": ["pytest", "测试失败"],
+    "artifacts": ["Python test"],
+    "outputs": ["passing tests"],
+    "constraints": []
+  },
+  "examples": {
+    "positive": ["pytest is failing"],
+    "negative": [],
+    "hard_negative": ["add new unit tests"],
+    "contrastive": [
+      {"query": "add tests", "expected_skill": "testing.test-generation"}
+    ]
+  },
+  "relations": {
+    "dependencies": [],
+    "composes_with": ["testing.test-generation"],
+    "supersedes": []
+  },
+  "routing": {"allow_implicit": true, "risk": "medium", "rollout_percent": 100}
+}
+```
+
+生命周期支持 `draft → candidate → shadow → canary → active → deprecated`。`shadow` Skill 只参与打分观察，不会被激活；`canary` 使用稳定路由键按 `rollout_percent` 放量；`supersedes` 会把旧能力的隐式匹配重定向到继任者；`SkillManager.transition` 对可编辑 Skill 的发布或回滚执行状态校验并写入审计记录。宿主还可传入附件/载体、必要输入、连接应用、live app、权限、外部写入、风险、意图类型和稳定放量键。`corecoder.skills.evaluate_router` 可计算正例 Precision@1、整体准确率、误激活率、漏召回率、澄清率、用户改选率、任务成功率、置信度差值、P95 路由延迟、高风险确认率、Shadow 对比、候选数量及估算加载 Token。
+
+设置 `CORECODER_SKILLS=0` 可关闭路由；`CORECODER_SKILLS_DIR`、`CORECODER_SKILL_TOP_K`、`CORECODER_SKILL_MAX_ACTIVE` 和 `CORECODER_SKILL_PROMPT_CHARS` 分别控制用户目录和路由预算。`CORECODER_SKILL_MIN_SCORE`（默认 `0.24`）是候选下限；`CORECODER_SKILL_CLARIFY_CONFIDENCE`（默认 `0.65`）、`CORECODER_SKILL_AUTO_CONFIDENCE`（默认 `0.82`）和 `CORECODER_SKILL_AMBIGUITY_MARGIN`（默认 `0.12`）共同控制拒绝、澄清和自动调用。
 
 ## 相关项目
 

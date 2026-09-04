@@ -1,1 +1,147 @@
-{"schema_version":1,"id":"security.dependency-audit","name":"Dependency Security Audit","version":"1.0.0","summary":"Assess dependency exposure, risky versions, provenance, lockfiles, and practical remediation without upgrading packages.","category":["security","dependencies","audit"],"tags":["dependency security","vulnerability audit","supply chain","依赖安全","供应链安全"],"aliases":["audit dependencies","依赖漏洞检查"],"intents":["audit dependency vulnerabilities","检查依赖安全风险"],"applies_when":["The user explicitly requests a dependency or software supply-chain security assessment."],"not_when":["upgrade dependency","general code security audit","升级依赖","普通代码安全审计"],"examples":{"positive":["Audit our locked dependencies for security and provenance risk","审计锁定依赖中的漏洞和供应链风险"],"negative":["Upgrade Pydantic to version 3","审查鉴权代码"]},"tools":{"required":["read_file","grep"],"recommended":["glob"],"forbidden":["write_file","edit_file","edit_ast","bash","agent","undo_changes"]},"conflicts_with":["security.code-audit"],"exclusive_group":"review-mode","token_budget":1000,"status":"active"}
+{
+  "schema_version": 2,
+  "id": "security.dependency-audit",
+  "name": "Dependency Security Audit",
+  "version": "1.0.0",
+  "summary": "Assess dependency exposure, risky versions, provenance, lockfiles, and practical remediation without upgrading packages.",
+  "layer": "workflow",
+  "category": [
+    "security",
+    "dependencies",
+    "audit"
+  ],
+  "tags": [
+    "dependency security",
+    "vulnerability audit",
+    "supply chain",
+    "依赖安全",
+    "供应链安全"
+  ],
+  "aliases": [
+    "audit dependencies",
+    "依赖漏洞检查"
+  ],
+  "intents": [
+    "audit dependency vulnerabilities",
+    "检查依赖安全风险"
+  ],
+  "signature": {
+    "domains": [
+      "security",
+      "dependencies",
+      "audit"
+    ],
+    "actions": [
+      "audit",
+      "audits",
+      "auditing",
+      "审计",
+      "assess",
+      "assesses",
+      "assessing",
+      "assessment",
+      "评估"
+    ],
+    "objects": [
+      "dependency",
+      "dependencies",
+      "vulnerability",
+      "lockfile",
+      "supply chain",
+      "provenance",
+      "依赖",
+      "漏洞",
+      "供应链"
+    ],
+    "artifacts": [
+      "requirements.txt",
+      "lockfile",
+      "pyproject.toml",
+      "package.json"
+    ],
+    "outputs": [
+      "audit report",
+      "remediation plan"
+    ],
+    "constraints": [
+      "read only",
+      "no upgrades"
+    ]
+  },
+  "applies_when": [
+    "The user explicitly requests a dependency or software supply-chain security assessment."
+  ],
+  "not_when": [
+    "upgrade dependency",
+    "general code security audit",
+    "升级依赖",
+    "普通代码安全审计"
+  ],
+  "examples": {
+    "positive": [
+      "Audit our locked dependencies for security and provenance risk",
+      "检查依赖的供应链安全风险",
+      "审计锁定依赖中的漏洞和供应链风险"
+    ],
+    "negative": [
+      "Upgrade the dependency with the known CVE",
+      "升级有漏洞的依赖",
+      "Upgrade Pydantic to version 3",
+      "审查鉴权代码"
+    ],
+    "hard_negative": [
+      "Audit this authentication flow for security vulnerabilities",
+      "Audit this repository for exposed credentials and unsafe secret logging"
+    ],
+    "contrastive": [
+      {
+        "query": "Audit this authentication flow for security vulnerabilities",
+        "expected_skill": "security.code-audit",
+        "reason": "Source-code security review is the general code audit."
+      },
+      {
+        "query": "Audit this repository for exposed credentials and unsafe secret logging",
+        "expected_skill": "security.secrets-audit",
+        "reason": "Embedded credentials route to the secrets audit."
+      },
+      {
+        "query": "Upgrade Pydantic to the next major version",
+        "expected_skill": "maintenance.dependency-upgrade",
+        "reason": "Actually changing versions is dependency upgrade."
+      }
+    ]
+  },
+  "tools": {
+    "required": [
+      "read_file",
+      "grep"
+    ],
+    "recommended": [
+      "glob"
+    ],
+    "forbidden": [
+      "write_file",
+      "edit_file",
+      "edit_ast",
+      "bash",
+      "agent",
+      "undo_changes"
+    ]
+  },
+  "conflicts_with": [
+    "security.code-audit"
+  ],
+  "relations": {
+    "dependencies": [],
+    "composes_with": [],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "low",
+    "rollout_percent": 100
+  },
+  "exclusive_group": "review-mode",
+  "token_budget": 1000,
+  "status": "active"
+}

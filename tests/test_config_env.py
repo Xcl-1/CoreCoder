@@ -29,6 +29,10 @@ ENV_KEYS = [
     "CORECODER_SKILL_TOP_K",
     "CORECODER_SKILL_MAX_ACTIVE",
     "CORECODER_SKILL_PROMPT_CHARS",
+    "CORECODER_SKILL_MIN_SCORE",
+    "CORECODER_SKILL_AUTO_CONFIDENCE",
+    "CORECODER_SKILL_CLARIFY_CONFIDENCE",
+    "CORECODER_SKILL_AMBIGUITY_MARGIN",
     "OPENAI_BASE_URL",
     "CORECODER_BASE_URL",
 ]
@@ -125,11 +129,19 @@ def test_skill_configuration(monkeypatch, tmp_path):
     monkeypatch.setenv("CORECODER_SKILL_TOP_K", "7")
     monkeypatch.setenv("CORECODER_SKILL_MAX_ACTIVE", "3")
     monkeypatch.setenv("CORECODER_SKILL_PROMPT_CHARS", "9000")
+    monkeypatch.setenv("CORECODER_SKILL_MIN_SCORE", "0.31")
+    monkeypatch.setenv("CORECODER_SKILL_AUTO_CONFIDENCE", "0.86")
+    monkeypatch.setenv("CORECODER_SKILL_CLARIFY_CONFIDENCE", "0.67")
+    monkeypatch.setenv("CORECODER_SKILL_AMBIGUITY_MARGIN", "0.08")
     config = Config.from_env()
     assert config.skills_dir == tmp_path / "skills"
     assert config.skill_top_k == 7
     assert config.skill_max_active == 3
     assert config.skill_prompt_chars == 9000
+    assert config.skill_min_score == 0.31
+    assert config.skill_auto_confidence == 0.86
+    assert config.skill_clarify_confidence == 0.67
+    assert config.skill_ambiguity_margin == 0.08
 
 
 # --- .env file in temporary directory ----------------------------------
@@ -181,6 +193,8 @@ def test_env_var_overrides_dotenv(tmp_path, monkeypatch, with_real_dotenv):
 
 def test_no_dotenv_uses_defaults(tmp_path, monkeypatch, with_real_dotenv):
     """Empty temp dir, no .env anywhere up the chain -> defaults."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     deep = tmp_path / "x" / "y" / "z"
     deep.mkdir(parents=True)
     monkeypatch.chdir(deep)
@@ -230,6 +244,11 @@ def test_memory_dir_default_expands_home(monkeypatch):
         ("CORECODER_SKILL_TOP_K", "0"),
         ("CORECODER_SKILL_MAX_ACTIVE", "8"),
         ("CORECODER_SKILL_PROMPT_CHARS", "100"),
+        ("CORECODER_SKILL_MIN_SCORE", "invalid"),
+        ("CORECODER_SKILL_MIN_SCORE", "3"),
+        ("CORECODER_SKILL_AUTO_CONFIDENCE", "1.2"),
+        ("CORECODER_SKILL_CLARIFY_CONFIDENCE", "-0.1"),
+        ("CORECODER_SKILL_AMBIGUITY_MARGIN", "2"),
     ],
 )
 def test_invalid_env_raises(monkeypatch, key, raw):

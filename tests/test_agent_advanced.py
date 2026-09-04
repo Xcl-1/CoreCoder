@@ -120,6 +120,24 @@ def test_finalization_messages_bound_large_tool_evidence():
     assert len(prompt) < 25_000
 
 
+@pytest.mark.asyncio
+async def test_sync_tool_arguments_are_validated_before_thread_execution():
+    agent = Agent(llm=LLM.__new__(LLM), tools=ALL_TOOLS, replay=False)
+
+    class _TC:
+        def __init__(self):
+            self.name = "glob"
+            self.arguments = {"file_path": "."}
+
+    result, elapsed, success = await agent._exec_tool(_TC())
+
+    assert not success
+    assert elapsed == 0
+    assert "bad arguments for glob" in result
+    assert "file_path" in result
+    assert "pattern" in result
+
+
 # --- Parallel execution --------------------------------------------------
 
 @pytest.mark.asyncio

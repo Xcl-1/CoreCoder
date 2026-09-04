@@ -1,25 +1,137 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "coding.bug-fix",
   "name": "Bug Diagnosis and Fix",
   "version": "1.0.0",
   "summary": "Reproduce, diagnose, and minimally fix incorrect application behavior or runtime failures.",
-  "category": ["coding", "debugging", "maintenance"],
-  "tags": ["bug", "debug", "crash", "exception", "缺陷", "报错", "故障"],
-  "aliases": ["fix bug", "问题排查", "修复故障"],
-  "intents": ["find and fix this bug", "diagnose this crash", "修复这个问题", "定位故障原因"],
-  "applies_when": ["Existing behavior is incorrect, crashes, or violates its intended contract."],
-  "not_when": ["pytest", "test failure", "implement a new feature", "review only", "测试失败", "新增功能", "仅审查"],
+  "layer": "workflow",
+  "category": [
+    "coding",
+    "debugging",
+    "maintenance"
+  ],
+  "tags": [
+    "bug",
+    "debug",
+    "crash",
+    "exception",
+    "缺陷",
+    "报错",
+    "故障"
+  ],
+  "aliases": [
+    "fix bug",
+    "问题排查",
+    "修复故障"
+  ],
+  "intents": [
+    "find and fix this bug",
+    "diagnose this crash",
+    "修复这个问题",
+    "定位故障原因"
+  ],
+  "signature": {
+    "domains": [
+      "coding",
+      "debugging"
+    ],
+    "actions": [
+      "fix",
+      "fixes",
+      "fixing",
+      "fixed",
+      "diagnose",
+      "diagnosing",
+      "debug",
+      "debugging",
+      "修复",
+      "排查",
+      "定位"
+    ],
+    "objects": [
+      "bug",
+      "bugs",
+      "crash",
+      "crashes",
+      "crashing",
+      "exception",
+      "exceptions",
+      "traceback",
+      "错误行为",
+      "故障"
+    ],
+    "artifacts": [
+      "source code",
+      "application"
+    ],
+    "outputs": [
+      "code fix"
+    ],
+    "constraints": [
+      "minimal change"
+    ]
+  },
+  "applies_when": [
+    "Existing behavior is incorrect, crashes, or violates its intended contract."
+  ],
+  "not_when": [
+    "pytest",
+    "test failure",
+    "implement a new feature",
+    "review only",
+    "测试失败",
+    "新增功能",
+    "仅审查"
+  ],
   "examples": {
-    "positive": ["This command crashes on empty input; find the cause and fix it", "空输入时程序崩溃，请定位并修复"],
-    "negative": ["Add a new command to the application", "pytest 失败了，修复测试"]
+    "positive": [
+      "This command crashes on empty input; find the cause and fix it",
+      "空输入时程序崩溃，请定位并修复"
+    ],
+    "negative": [
+      "Add a new command to the application",
+      "pytest 失败了，修复测试"
+    ],
+    "hard_negative": [
+      "Implement a new feature",
+      "Review this code without editing it"
+    ],
+    "contrastive": [
+      {
+        "query": "pytest is failing; diagnose and fix the test failure",
+        "expected_skill": "python.test-debug",
+        "reason": "Existing Python test failures need the test-debug workflow."
+      }
+    ]
   },
   "tools": {
-    "required": ["read_file", "grep"],
-    "recommended": ["glob", "bash", "edit_file", "edit_ast"],
+    "required": [
+      "read_file",
+      "grep"
+    ],
+    "recommended": [
+      "glob",
+      "bash",
+      "edit_file",
+      "edit_ast"
+    ],
     "forbidden": []
   },
-  "conflicts_with": ["python.test-debug"],
+  "conflicts_with": [
+    "python.test-debug"
+  ],
+  "relations": {
+    "dependencies": [],
+    "composes_with": [
+      "testing.test-generation"
+    ],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "medium",
+    "rollout_percent": 100
+  },
   "exclusive_group": "implementation-mode",
   "token_budget": 1000,
   "status": "active"

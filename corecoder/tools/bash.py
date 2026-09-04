@@ -25,6 +25,10 @@ _cwd_context: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 
 class BashTool(Tool):
     name = "bash"
+    input_types = ("shell_command",)
+    output_type = "process_result"
+    permission_scope = "process:execute"
+    side_effect = "dynamic"
     description = (
         "Execute a shell command. Returns stdout, stderr, and exit code. "
         "Use this for running tests, installing packages, git operations, etc."

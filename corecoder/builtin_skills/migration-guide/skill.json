@@ -1,1 +1,130 @@
-{"schema_version":1,"id":"docs.migration-guide","name":"Migration Guide Writing","version":"1.0.0","summary":"Write an actionable migration guide for users moving between versions, APIs, schemas, or configurations.","category":["documentation","migration","release"],"tags":["migration guide","upgrade guide","breaking changes","迁移指南","升级指南"],"aliases":["write migration guide","编写迁移文档"],"intents":["document the upgrade path","编写版本迁移指南"],"applies_when":["The deliverable explains how consumers move from an old contract to a new one."],"not_when":["perform migration","general README","执行迁移","普通 README"],"examples":{"positive":["Write a migration guide from API v1 to v2","编写从 API v1 升级到 v2 的迁移指南"],"negative":["Implement the API migration","更新项目安装说明"]},"tools":{"required":["read_file","grep"],"recommended":["glob","edit_file","write_file"],"forbidden":[]},"conflicts_with":["coding.api-migration"],"exclusive_group":"documentation-mode","token_budget":900,"status":"active"}
+{
+  "schema_version": 2,
+  "id": "docs.migration-guide",
+  "name": "Migration Guide Writing",
+  "version": "1.0.0",
+  "summary": "Write an actionable migration guide for users moving between versions, APIs, schemas, or configurations.",
+  "layer": "workflow",
+  "category": [
+    "documentation",
+    "migration",
+    "release"
+  ],
+  "tags": [
+    "migration guide",
+    "upgrade guide",
+    "breaking changes",
+    "迁移指南",
+    "升级指南"
+  ],
+  "aliases": [
+    "write migration guide",
+    "编写迁移文档"
+  ],
+  "intents": [
+    "document the upgrade path",
+    "编写版本迁移指南"
+  ],
+  "signature": {
+    "domains": [
+      "documentation",
+      "migration",
+      "release"
+    ],
+    "actions": [
+      "write",
+      "writes",
+      "writing",
+      "编写",
+      "撰写",
+      "document",
+      "documents",
+      "documenting",
+      "文档"
+    ],
+    "objects": [
+      "migration guide",
+      "upgrade guide",
+      "breaking changes",
+      "迁移指南",
+      "升级指南"
+    ],
+    "artifacts": [
+      "release diff",
+      "public api"
+    ],
+    "outputs": [
+      "migration guide"
+    ],
+    "constraints": [
+      "user facing",
+      "actionable steps"
+    ]
+  },
+  "applies_when": [
+    "The deliverable explains how consumers move from an old contract to a new one."
+  ],
+  "not_when": [
+    "perform migration",
+    "general README",
+    "执行迁移",
+    "普通 README"
+  ],
+  "examples": {
+    "positive": [
+      "Write a migration guide from API v1 to v2",
+      "编写从 API v1 到 v2 的迁移指南",
+      "编写从 API v1 升级到 v2 的迁移指南"
+    ],
+    "negative": [
+      "Migrate clients from API v1 to v2 without downtime",
+      "执行代码迁移",
+      "Implement the API migration",
+      "更新项目安装说明"
+    ],
+    "hard_negative": [
+      "Write release notes from the changes in this version",
+      "Update the README to document the new configuration options"
+    ],
+    "contrastive": [
+      {
+        "query": "Write release notes from the changes in this version",
+        "expected_skill": "docs.changelog-release-notes",
+        "reason": "Release announcements are changelog and release notes."
+      },
+      {
+        "query": "Migrate clients from API v1 to v2 without downtime",
+        "expected_skill": "coding.api-migration",
+        "reason": "Changing consumer code is API migration, not documenting it."
+      }
+    ]
+  },
+  "tools": {
+    "required": [
+      "read_file",
+      "grep"
+    ],
+    "recommended": [
+      "glob",
+      "edit_file",
+      "write_file"
+    ],
+    "forbidden": []
+  },
+  "conflicts_with": [
+    "coding.api-migration"
+  ],
+  "relations": {
+    "dependencies": [],
+    "composes_with": [],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "low",
+    "rollout_percent": 100
+  },
+  "exclusive_group": "documentation-mode",
+  "token_budget": 900,
+  "status": "active"
+}

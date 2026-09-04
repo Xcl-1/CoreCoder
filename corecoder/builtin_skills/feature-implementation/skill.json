@@ -1,25 +1,128 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "coding.feature-implementation",
   "name": "Feature Implementation",
   "version": "1.0.0",
   "summary": "Implement a requested feature end to end while preserving existing contracts and verifying behavior.",
-  "category": ["coding", "implementation", "feature"],
-  "tags": ["feature", "implementation", "add capability", "功能开发", "实现功能"],
-  "aliases": ["build feature", "开发功能"],
-  "intents": ["implement this feature", "add this capability", "实现这个功能", "新增功能"],
-  "applies_when": ["The user asks to add or implement observable product behavior."],
-  "not_when": ["fix a bug", "refactor without behavior change", "review only", "修复缺陷", "仅重构", "仅审查"],
+  "layer": "workflow",
+  "category": [
+    "coding",
+    "implementation",
+    "feature"
+  ],
+  "tags": [
+    "feature",
+    "implementation",
+    "add capability",
+    "功能开发",
+    "实现功能"
+  ],
+  "aliases": [
+    "build feature",
+    "开发功能"
+  ],
+  "intents": [
+    "implement this feature",
+    "add this capability",
+    "实现这个功能",
+    "新增功能"
+  ],
+  "signature": {
+    "domains": [
+      "coding",
+      "implementation"
+    ],
+    "actions": [
+      "implement",
+      "implements",
+      "implementing",
+      "add",
+      "adds",
+      "adding",
+      "build",
+      "builds",
+      "building",
+      "实现",
+      "新增",
+      "开发"
+    ],
+    "objects": [
+      "feature",
+      "features",
+      "capability",
+      "command",
+      "功能"
+    ],
+    "artifacts": [
+      "source code",
+      "application"
+    ],
+    "outputs": [
+      "working feature"
+    ],
+    "constraints": [
+      "preserve contracts"
+    ]
+  },
+  "applies_when": [
+    "The user asks to add or implement observable product behavior."
+  ],
+  "not_when": [
+    "fix a bug",
+    "refactor without behavior change",
+    "review only",
+    "修复缺陷",
+    "仅重构",
+    "仅审查"
+  ],
   "examples": {
-    "positive": ["Add export support to this command", "为这个命令增加导出功能"],
-    "negative": ["Review this change without editing it", "重构代码但不要改变行为"]
+    "positive": [
+      "Add export support to this command",
+      "为这个命令增加导出功能"
+    ],
+    "negative": [
+      "Review this change without editing it",
+      "重构代码但不要改变行为"
+    ],
+    "hard_negative": [
+      "Fix an existing crash",
+      "Only explain the current implementation"
+    ],
+    "contrastive": [
+      {
+        "query": "Refactor this module without changing observable behavior",
+        "expected_skill": "coding.safe-refactor",
+        "reason": "Behavior-preserving changes are refactoring, not feature work."
+      }
+    ]
   },
   "tools": {
-    "required": ["read_file", "grep"],
-    "recommended": ["glob", "edit_file", "write_file", "bash"],
+    "required": [
+      "read_file",
+      "grep"
+    ],
+    "recommended": [
+      "glob",
+      "edit_file",
+      "write_file",
+      "bash"
+    ],
     "forbidden": []
   },
   "exclusive_group": "implementation-mode",
+  "relations": {
+    "dependencies": [],
+    "composes_with": [
+      "testing.test-generation",
+      "docs.technical-documentation"
+    ],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "medium",
+    "rollout_percent": 100
+  },
   "token_budget": 1000,
   "status": "active"
 }

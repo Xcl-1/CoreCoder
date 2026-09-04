@@ -343,6 +343,9 @@ def _repl(agent: Agent, config: Config, show_history: bool = False):
         if user_input == "/skill explain":
             _explain_skill_route(agent)
             continue
+        if user_input == "/skill audit":
+            _audit_skill_catalog(agent)
+            continue
         if user_input == "/permissions":
             _show_permissions(agent)
             continue
@@ -585,6 +588,7 @@ def _show_help():
         "  /skill clear   Clear pinned skills\n"
         "  /skill reload  Rescan skill directories\n"
         "  /skill explain Explain the previous route\n"
+        "  /skill audit   Show catalog overlap and relation issues\n"
         "  /permissions   List security rules\n"
         "  /permit <t> <p> Add an allow rule\n"
         "  /deny <t> <p> Add a deny rule\n"
@@ -650,6 +654,10 @@ def _create_skill_manager(config: Config) -> SkillManager | None:
         top_k=config.skill_top_k,
         max_active=config.skill_max_active,
         max_prompt_chars=config.skill_prompt_chars,
+        min_score=config.skill_min_score,
+        auto_confidence=config.skill_auto_confidence,
+        clarify_confidence=config.skill_clarify_confidence,
+        ambiguity_margin=config.skill_ambiguity_margin,
     )
     for error in manager.registry.errors:
         logger.warning("Skill discovery: %s", error)
@@ -789,11 +797,11 @@ def _show_skills(agent: Agent, config: Config) -> None:
     from rich.table import Table
     skills = agent.skills.registry.all(include_inactive=True)
     table = Table(title=f"Skills ({len(skills)})", border_style="blue")
-    table.add_column("ID", style="cyan")
-    table.add_column("Scope", width=9)
-    table.add_column("Status", width=10)
-    table.add_column("Version", width=9)
-    table.add_column("Summary")
+    table.add_column("ID", style="cyan", max_width=35, no_wrap=True, overflow="ellipsis")
+    table.add_column("Scope", width=7, no_wrap=True)
+    table.add_column("Status", width=10, no_wrap=True)
+    table.add_column("Layer", width=8, no_wrap=True)
+    table.add_column("Version", width=7, no_wrap=True)
     for skill in skills:
         manifest = skill.manifest
         pinned = " *" if manifest.id in agent.skills.pinned else ""
@@ -801,14 +809,20 @@ def _show_skills(agent: Agent, config: Config) -> None:
             manifest.id + pinned,
             skill.scope,
             manifest.status,
+            manifest.layer,
             manifest.version,
-            manifest.summary,
         )
     console.print(table)
+    console.print("[dim]Use /skill show <id> for routing metadata and the full summary.[/dim]")
     if agent.skills.registry.errors:
         console.print(f"[yellow]{len(agent.skills.registry.errors)} skill package(s) failed validation.[/yellow]")
     if agent.skills.registry.overrides:
         console.print(f"[dim]{len(agent.skills.registry.overrides)} scoped override(s) applied.[/dim]")
+    if agent.skills.router.catalog.issues:
+        console.print(
+            f"[yellow]{len(agent.skills.router.catalog.issues)} catalog governance issue(s); "
+            "use /skill audit for details.[/yellow]"
+        )
 
 
 def _show_skill(agent: Agent, skill_id: str) -> None:
@@ -826,6 +840,8 @@ def _show_skill(agent: Agent, skill_id: str) -> None:
         f"- Version: `{manifest.version}`\n"
         f"- Scope: `{skill.scope}`\n"
         f"- Status: `{manifest.status}`\n"
+        f"- Layer: `{manifest.layer}`\n"
+        f"- Risk: `{manifest.routing.risk}`\n"
         f"- Category: {', '.join(manifest.category) or '-'}\n"
         f"- Tags: {', '.join(manifest.tags) or '-'}\n"
         f"- Required tools: {', '.join(manifest.tools.required) or '-'}\n"
@@ -878,16 +894,39 @@ def _explain_skill_route(agent: Agent) -> None:
         console.print("[dim]No skill route has run in this session.[/dim]")
         return
     console.print(f"[bold]Selected:[/bold] {', '.join(result.selected_ids) or '-'}")
+    console.print(
+        f"[bold]Decision:[/bold] {result.decision} "
+        f"confidence={result.confidence:.4f} margin={result.margin:.4f}"
+    )
+    signature = result.signature.model_dump(exclude_defaults=True)
+    if signature:
+        console.print(f"[bold]Task signature:[/bold] {signature}")
+    if result.clarification:
+        console.print(f"[bold]Clarification:[/bold] {result.clarification}")
     console.print(f"[bold]Prompt characters:[/bold] {len(result.prompt)}")
     for candidate in result.candidates:
         state = "selected" if candidate.skill.manifest.id in result.selected_ids else "candidate"
         reasons = "; ".join(candidate.reasons) or "metadata similarity"
         console.print(
-            f"  [cyan]{candidate.skill.manifest.id}[/cyan] {candidate.score:.4f} "
+            f"  [cyan]{candidate.skill.manifest.id}[/cyan] score={candidate.score:.4f} "
+            f"recall={candidate.recall_score:.4f} confidence={candidate.confidence:.4f} "
             f"[{state}] {reasons}"
         )
     for reason in result.rejected:
         console.print(f"  [dim]rejected: {reason}[/dim]")
+
+
+def _audit_skill_catalog(agent: Agent) -> None:
+    if agent.skills is None:
+        console.print("[yellow]Skills are disabled.[/yellow]")
+        return
+    issues = agent.skills.router.catalog.issues
+    if not issues:
+        console.print("[green]No skill catalog governance issues found.[/green]")
+        return
+    console.print(f"[bold]Skill catalog issues ({len(issues)}):[/bold]")
+    for issue in issues:
+        console.print(f"  [yellow]{issue.code}[/yellow] {issue.message}")
 
 
 # ---- security helpers --------------------------------------------------

@@ -53,6 +53,8 @@ def _get_tiktoken():
 
 def _approx_tokens(text: str) -> int:
     """Token count. Uses tiktoken if installed, else chars/3.5."""
+    if not text:
+        return 0
     enc = _get_tiktoken()
     if enc:
         return len(enc.encode(text))

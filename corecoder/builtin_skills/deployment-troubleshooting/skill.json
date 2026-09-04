@@ -1,1 +1,141 @@
-{"schema_version":1,"id":"devops.deployment-troubleshooting","name":"Deployment Troubleshooting","version":"1.0.0","summary":"Diagnose application deployment, startup, health, connectivity, configuration, and rollback failures.","category":["devops","deployment","debugging"],"tags":["deployment failure","startup failure","health check","部署故障","发布失败"],"aliases":["debug deployment","部署排错"],"intents":["fix production deployment failure","排查部署后启动失败"],"applies_when":["A deployed application fails to start, become healthy, or serve traffic."],"not_when":["CI pipeline failure","design deployment","CI 流水线失败","设计部署方案"],"examples":{"positive":["The service is unhealthy after deployment; find the cause","服务部署后健康检查失败，请定位原因"],"negative":["The CI build job cannot install dependencies","为应用编写 Dockerfile"]},"tools":{"required":["read_file","grep"],"recommended":["glob","bash","edit_file"],"forbidden":[]},"conflicts_with":["python.test-debug"],"exclusive_group":"operations-debug","token_budget":1100,"status":"active"}
+{
+  "schema_version": 2,
+  "id": "devops.deployment-troubleshooting",
+  "name": "Deployment Troubleshooting",
+  "version": "1.0.0",
+  "summary": "Diagnose application deployment, startup, health, connectivity, configuration, and rollback failures.",
+  "layer": "workflow",
+  "category": [
+    "devops",
+    "deployment",
+    "debugging"
+  ],
+  "tags": [
+    "deployment failure",
+    "startup failure",
+    "health check",
+    "部署故障",
+    "发布失败"
+  ],
+  "aliases": [
+    "debug deployment",
+    "部署排错"
+  ],
+  "intents": [
+    "fix production deployment failure",
+    "排查部署后启动失败"
+  ],
+  "signature": {
+    "domains": [
+      "devops",
+      "deployment",
+      "debugging"
+    ],
+    "actions": [
+      "diagnose",
+      "diagnosing",
+      "debug",
+      "debugging",
+      "排查",
+      "定位",
+      "诊断",
+      "fix",
+      "fixes",
+      "fixing",
+      "fixed",
+      "修复",
+      "修正"
+    ],
+    "objects": [
+      "deployment",
+      "startup",
+      "health check",
+      "connectivity",
+      "rollback",
+      "production",
+      "container",
+      "unhealthy",
+      "部署",
+      "启动",
+      "健康检查",
+      "容器"
+    ],
+    "artifacts": [
+      "deployed service",
+      "container",
+      "deployment manifest",
+      "pod"
+    ],
+    "outputs": [
+      "root cause",
+      "deployment fix"
+    ],
+    "constraints": []
+  },
+  "applies_when": [
+    "A deployed application fails to start, become healthy, or serve traffic."
+  ],
+  "not_when": [
+    "CI pipeline failure",
+    "design deployment",
+    "CI 流水线失败",
+    "设计部署方案"
+  ],
+  "examples": {
+    "positive": [
+      "The service is unhealthy after deployment; find the cause",
+      "排查部署后服务无法启动",
+      "服务部署后健康检查失败，请定位原因"
+    ],
+    "negative": [
+      "The GitHub Actions build fails only in CI",
+      "CI 流水线失败",
+      "The CI build job cannot install dependencies",
+      "为应用编写 Dockerfile"
+    ],
+    "hard_negative": [
+      "The GitHub Actions build fails only in CI; diagnose it",
+      "Create an RCA from these incident logs and timeline"
+    ],
+    "contrastive": [
+      {
+        "query": "The GitHub Actions build fails only in CI; diagnose it",
+        "expected_skill": "devops.ci-cd-debug",
+        "reason": "Pipeline-side failures route to CI/CD debugging."
+      },
+      {
+        "query": "Create an RCA from these incident logs and timeline",
+        "expected_skill": "reliability.incident-root-cause",
+        "reason": "Evidence-based incident analysis is a separate read-only skill."
+      }
+    ]
+  },
+  "tools": {
+    "required": [
+      "read_file",
+      "grep"
+    ],
+    "recommended": [
+      "glob",
+      "bash",
+      "edit_file"
+    ],
+    "forbidden": []
+  },
+  "conflicts_with": [
+    "python.test-debug"
+  ],
+  "relations": {
+    "dependencies": [],
+    "composes_with": [],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "medium",
+    "rollout_percent": 100
+  },
+  "exclusive_group": "operations-debug",
+  "token_budget": 1100,
+  "status": "active"
+}

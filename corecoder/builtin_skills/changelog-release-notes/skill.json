@@ -1,1 +1,129 @@
-{"schema_version":1,"id":"docs.changelog-release-notes","name":"Changelog and Release Notes","version":"1.0.0","summary":"Turn verified repository changes into concise user-facing changelog entries and release notes.","category":["documentation","release","writing"],"tags":["changelog","release notes","版本说明","更新日志"],"aliases":["write changelog","编写发布说明"],"intents":["write release notes","生成 CHANGELOG"],"applies_when":["The user asks to summarize completed changes for a release audience."],"not_when":["prepare release files","migration guide","准备发布","迁移指南"],"examples":{"positive":["Write release notes from the changes in this version","根据本版本变更编写发布说明"],"negative":["Bump the version and run release checks","编写 API 升级操作指南"]},"tools":{"required":["read_file","grep"],"recommended":["glob","edit_file","write_file"],"forbidden":[]},"exclusive_group":"documentation-mode","token_budget":800,"status":"active"}
+{
+  "schema_version": 2,
+  "id": "docs.changelog-release-notes",
+  "name": "Changelog and Release Notes",
+  "version": "1.0.0",
+  "summary": "Turn verified repository changes into concise user-facing changelog entries and release notes.",
+  "layer": "workflow",
+  "category": [
+    "documentation",
+    "release",
+    "writing"
+  ],
+  "tags": [
+    "changelog",
+    "release notes",
+    "版本说明",
+    "更新日志"
+  ],
+  "aliases": [
+    "write changelog",
+    "编写发布说明"
+  ],
+  "intents": [
+    "write release notes",
+    "生成 CHANGELOG"
+  ],
+  "signature": {
+    "domains": [
+      "documentation",
+      "release",
+      "writing"
+    ],
+    "actions": [
+      "write",
+      "writes",
+      "writing",
+      "编写",
+      "撰写",
+      "document",
+      "documents",
+      "documenting",
+      "文档"
+    ],
+    "objects": [
+      "changelog",
+      "release notes",
+      "changes",
+      "变更日志",
+      "版本说明",
+      "发布说明"
+    ],
+    "artifacts": [
+      "git history",
+      "merged changes"
+    ],
+    "outputs": [
+      "changelog entry",
+      "release notes"
+    ],
+    "constraints": [
+      "user facing"
+    ]
+  },
+  "applies_when": [
+    "The user asks to summarize completed changes for a release audience."
+  ],
+  "not_when": [
+    "prepare release files",
+    "migration guide",
+    "准备发布",
+    "迁移指南"
+  ],
+  "examples": {
+    "positive": [
+      "Write release notes from the changes in this version",
+      "根据本次改动生成 CHANGELOG",
+      "根据本版本变更编写发布说明"
+    ],
+    "negative": [
+      "Prepare version 2.1.0 for release",
+      "准备发布",
+      "Bump the version and run release checks",
+      "编写 API 升级操作指南"
+    ],
+    "hard_negative": [
+      "Write a migration guide for users upgrading to v2",
+      "Update the README installation section for the new release"
+    ],
+    "contrastive": [
+      {
+        "query": "Write a migration guide from API v1 to v2",
+        "expected_skill": "docs.migration-guide",
+        "reason": "User upgrade instructions are a migration guide."
+      },
+      {
+        "query": "Prepare version 2.1.0 for release",
+        "expected_skill": "release.preparation",
+        "reason": "Running the release checklist belongs to release preparation."
+      }
+    ]
+  },
+  "tools": {
+    "required": [
+      "read_file",
+      "grep"
+    ],
+    "recommended": [
+      "glob",
+      "edit_file",
+      "write_file"
+    ],
+    "forbidden": []
+  },
+  "relations": {
+    "dependencies": [],
+    "composes_with": [
+      "release.preparation"
+    ],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "low",
+    "rollout_percent": 100
+  },
+  "exclusive_group": "documentation-mode",
+  "token_budget": 800,
+  "status": "active"
+}

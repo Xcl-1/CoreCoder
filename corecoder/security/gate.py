@@ -49,6 +49,7 @@ class SecurityDecision:
     allowed: bool
     reason: str
     rule: PermissionRule | None = None
+    user_confirmed: bool = False
 
 
 # type alias for the confirm callback
@@ -159,13 +160,46 @@ class Guard:
             )
 
         # ---- Layer 4: audit already written above ----
-        return SecurityDecision(allowed=True, reason=rule.reason, rule=rule)
+        return SecurityDecision(
+            allowed=True,
+            reason=rule.reason,
+            rule=rule,
+            user_confirmed=user_confirmed,
+        )
 
     def sanitize(self, text: str) -> str:
         """Layer 5: redact secrets from tool output."""
         for pattern, replacement in _SENSITIVE_PATTERNS:
             text = re.sub(pattern, replacement, text, flags=re.IGNORECASE | re.DOTALL)
         return text
+
+    def request_confirmation(
+        self,
+        tool_name: str,
+        arguments: dict,
+        reason: str,
+        source: str = "runtime",
+    ) -> SecurityDecision:
+        """Request and audit an additional runtime risk confirmation."""
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+        if self.confirm_callback is None:
+            self._audit(ts, tool_name, arguments, "deny", source, f"{reason} — requires confirmation")
+            return SecurityDecision(False, f"{reason} (requires confirmation)")
+        choice = self.confirm_callback(tool_name, arguments, reason)
+        if choice is True:
+            self._audit(
+                ts,
+                tool_name,
+                arguments,
+                "allow",
+                source,
+                reason,
+                user_confirmed=True,
+            )
+            return SecurityDecision(True, reason, user_confirmed=True)
+        suffix = "user denied" if choice is False else "user cancelled"
+        self._audit(ts, tool_name, arguments, "deny", source, f"{reason} — {suffix}")
+        return SecurityDecision(False, f"{reason} ({suffix})")
 
     # ---- internal ---------------------------------------------------------
 

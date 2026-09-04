@@ -1,1 +1,133 @@
-{"schema_version":1,"id":"devops.containerization","name":"Application Containerization","version":"1.0.0","summary":"Create or improve container builds for reproducibility, minimal images, correct runtime behavior, and safe defaults.","category":["devops","containers","delivery"],"tags":["Docker","container","Dockerfile","镜像","容器化"],"aliases":["containerize app","应用容器化"],"intents":["create a Dockerfile","将应用容器化"],"applies_when":["The user requests a container image or container build improvement."],"not_when":["debug deployment","CI failure","排查部署","流水线失败"],"examples":{"positive":["Create a production Dockerfile for this service","为这个服务创建生产 Dockerfile"],"negative":["The deployed container keeps restarting","修复 CI 构建失败"]},"tools":{"required":["read_file","grep"],"recommended":["glob","write_file","edit_file","bash"],"forbidden":[]},"exclusive_group":"delivery-implementation","token_budget":1000,"status":"active"}
+{
+  "schema_version": 2,
+  "id": "devops.containerization",
+  "name": "Application Containerization",
+  "version": "1.0.0",
+  "summary": "Create or improve container builds for reproducibility, minimal images, correct runtime behavior, and safe defaults.",
+  "layer": "workflow",
+  "category": [
+    "devops",
+    "containers",
+    "delivery"
+  ],
+  "tags": [
+    "Docker",
+    "container",
+    "Dockerfile",
+    "镜像",
+    "容器化"
+  ],
+  "aliases": [
+    "containerize app",
+    "应用容器化"
+  ],
+  "intents": [
+    "create a Dockerfile",
+    "将应用容器化"
+  ],
+  "signature": {
+    "domains": [
+      "devops",
+      "containers",
+      "delivery"
+    ],
+    "actions": [
+      "implement",
+      "implementing",
+      "add",
+      "adds",
+      "adding",
+      "实现",
+      "新增",
+      "添加",
+      "build",
+      "builds",
+      "building",
+      "构建"
+    ],
+    "objects": [
+      "dockerfile",
+      "container",
+      "image",
+      "compose",
+      "镜像",
+      "容器",
+      "容器化"
+    ],
+    "artifacts": [
+      "dockerfile",
+      "docker compose"
+    ],
+    "outputs": [
+      "container image",
+      "dockerfile"
+    ],
+    "constraints": [
+      "minimal image",
+      "reproducible build"
+    ]
+  },
+  "applies_when": [
+    "The user requests a container image or container build improvement."
+  ],
+  "not_when": [
+    "debug deployment",
+    "CI failure",
+    "排查部署",
+    "流水线失败"
+  ],
+  "examples": {
+    "positive": [
+      "Create a production Dockerfile for this service",
+      "为这个服务创建生产 Dockerfile"
+    ],
+    "negative": [
+      "Debug the failing production deployment",
+      "排查部署失败",
+      "The deployed container keeps restarting",
+      "修复 CI 构建失败"
+    ],
+    "hard_negative": [
+      "The GitHub Actions build fails only in CI; diagnose it",
+      "The deployed container keeps restarting in production"
+    ],
+    "contrastive": [
+      {
+        "query": "The GitHub Actions build fails only in CI; diagnose it",
+        "expected_skill": "devops.ci-cd-debug",
+        "reason": "Pipeline-side failures route to CI/CD debugging."
+      },
+      {
+        "query": "The service is unhealthy after deployment; find the cause",
+        "expected_skill": "devops.deployment-troubleshooting",
+        "reason": "Runtime deployment failures are deployment troubleshooting."
+      }
+    ]
+  },
+  "tools": {
+    "required": [
+      "read_file",
+      "grep"
+    ],
+    "recommended": [
+      "glob",
+      "write_file",
+      "edit_file",
+      "bash"
+    ],
+    "forbidden": []
+  },
+  "relations": {
+    "dependencies": [],
+    "composes_with": [],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "medium",
+    "rollout_percent": 100
+  },
+  "exclusive_group": "delivery-implementation",
+  "token_budget": 1000,
+  "status": "active"
+}

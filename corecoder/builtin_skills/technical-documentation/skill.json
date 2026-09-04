@@ -1,23 +1,134 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "docs.technical-documentation",
   "name": "Technical Documentation",
   "version": "1.0.0",
   "summary": "Create or update accurate README, API, configuration, and developer documentation from repository evidence.",
-  "category": ["documentation", "writing", "developer-experience"],
-  "tags": ["documentation", "README", "API docs", "文档", "技术文档", "使用说明"],
-  "aliases": ["write docs", "更新文档"],
-  "intents": ["document this feature", "update the README", "编写技术文档", "更新使用说明"],
-  "applies_when": ["The requested deliverable is repository or API documentation."],
-  "not_when": ["review code", "implement feature only", "代码审查", "仅实现功能"],
+  "layer": "workflow",
+  "category": [
+    "documentation",
+    "writing",
+    "developer-experience"
+  ],
+  "tags": [
+    "documentation",
+    "README",
+    "API docs",
+    "文档",
+    "技术文档",
+    "使用说明"
+  ],
+  "aliases": [
+    "write docs",
+    "更新文档"
+  ],
+  "intents": [
+    "document this feature",
+    "update the README",
+    "编写技术文档",
+    "更新使用说明"
+  ],
+  "signature": {
+    "domains": [
+      "documentation",
+      "writing",
+      "developer-experience"
+    ],
+    "actions": [
+      "write",
+      "writes",
+      "writing",
+      "编写",
+      "撰写",
+      "document",
+      "documents",
+      "documenting",
+      "文档"
+    ],
+    "objects": [
+      "documentation",
+      "readme",
+      "api docs",
+      "configuration docs",
+      "文档",
+      "技术文档",
+      "使用说明"
+    ],
+    "artifacts": [
+      "readme",
+      "source code",
+      "markdown"
+    ],
+    "outputs": [
+      "documentation",
+      "readme update"
+    ],
+    "constraints": [
+      "evidence based"
+    ]
+  },
+  "applies_when": [
+    "The requested deliverable is repository or API documentation."
+  ],
+  "not_when": [
+    "review code",
+    "implement feature only",
+    "代码审查",
+    "仅实现功能"
+  ],
   "examples": {
-    "positive": ["Update the README for the new configuration options", "为新增配置项更新 README"],
-    "negative": ["Review this pull request for bugs", "实现接口但不需要文档"]
+    "positive": [
+      "Update the README for the new configuration",
+      "为这个功能编写技术文档",
+      "Update the README for the new configuration options",
+      "为新增配置项更新 README"
+    ],
+    "negative": [
+      "Review these changes for correctness",
+      "代码审查",
+      "Review this pull request for bugs",
+      "实现接口但不需要文档"
+    ],
+    "hard_negative": [
+      "Write release notes from the changes in this version",
+      "Write a migration guide from API v1 to v2"
+    ],
+    "contrastive": [
+      {
+        "query": "Write release notes from the changes in this version",
+        "expected_skill": "docs.changelog-release-notes",
+        "reason": "Release-facing summaries are changelog and release notes."
+      },
+      {
+        "query": "Write a migration guide from API v1 to v2",
+        "expected_skill": "docs.migration-guide",
+        "reason": "Version upgrade instructions are a migration guide."
+      }
+    ]
   },
   "tools": {
-    "required": ["read_file"],
-    "recommended": ["grep", "glob", "edit_file", "write_file"],
+    "required": [
+      "read_file"
+    ],
+    "recommended": [
+      "grep",
+      "glob",
+      "edit_file",
+      "write_file"
+    ],
     "forbidden": []
+  },
+  "relations": {
+    "dependencies": [],
+    "composes_with": [
+      "coding.feature-implementation"
+    ],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "low",
+    "rollout_percent": 100
   },
   "exclusive_group": "documentation-mode",
   "token_budget": 900,

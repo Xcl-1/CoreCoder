@@ -1,1 +1,137 @@
-{"schema_version":1,"id":"debugging.concurrency","name":"Concurrency Debugging","version":"1.0.0","summary":"Diagnose races, deadlocks, ordering bugs, cancellation errors, and unsafe shared state.","category":["debugging","concurrency","coding"],"tags":["race condition","deadlock","async","thread","并发问题","死锁","竞态"],"aliases":["debug concurrency","并发排错"],"intents":["find this race condition","排查并发死锁"],"applies_when":["Failure depends on timing, scheduling, cancellation, or shared mutable state."],"not_when":["general crash","performance only","普通崩溃","仅性能优化"],"examples":{"positive":["Find the race condition causing duplicate writes","定位导致重复写入的竞态条件"],"negative":["Fix a deterministic validation error","提高单线程解析性能"]},"tools":{"required":["read_file","grep"],"recommended":["glob","bash","edit_file"],"forbidden":[]},"conflicts_with":["coding.bug-fix"],"exclusive_group":"debugging-specialist","token_budget":1100,"status":"active"}
+{
+  "schema_version": 2,
+  "id": "debugging.concurrency",
+  "name": "Concurrency Debugging",
+  "version": "1.0.0",
+  "summary": "Diagnose races, deadlocks, ordering bugs, cancellation errors, and unsafe shared state.",
+  "layer": "workflow",
+  "category": [
+    "debugging",
+    "concurrency",
+    "coding"
+  ],
+  "tags": [
+    "race condition",
+    "deadlock",
+    "async",
+    "thread",
+    "并发问题",
+    "死锁",
+    "竞态"
+  ],
+  "aliases": [
+    "debug concurrency",
+    "并发排错"
+  ],
+  "intents": [
+    "find this race condition",
+    "排查并发死锁"
+  ],
+  "signature": {
+    "domains": [
+      "debugging",
+      "concurrency",
+      "coding"
+    ],
+    "actions": [
+      "diagnose",
+      "diagnosing",
+      "debug",
+      "debugging",
+      "排查",
+      "定位",
+      "诊断",
+      "reproduce",
+      "reproduces",
+      "reproducing",
+      "复现"
+    ],
+    "objects": [
+      "race condition",
+      "deadlock",
+      "thread",
+      "async task",
+      "lock",
+      "cancellation",
+      "并发",
+      "竞态",
+      "死锁"
+    ],
+    "artifacts": [
+      "source code"
+    ],
+    "outputs": [
+      "root cause",
+      "code fix"
+    ],
+    "constraints": [
+      "timing dependent"
+    ]
+  },
+  "applies_when": [
+    "Failure depends on timing, scheduling, cancellation, or shared mutable state."
+  ],
+  "not_when": [
+    "general crash",
+    "performance only",
+    "普通崩溃",
+    "仅性能优化"
+  ],
+  "examples": {
+    "positive": [
+      "Find the race condition causing duplicate writes",
+      "排查导致重复写入的并发竞态",
+      "定位导致重复写入的竞态条件"
+    ],
+    "negative": [
+      "Diagnose this crash on empty input",
+      "普通崩溃排查",
+      "Fix a deterministic validation error",
+      "提高单线程解析性能"
+    ],
+    "hard_negative": [
+      "This test fails intermittently in CI; find the source of flakiness",
+      "Profile and reduce the parser latency under load"
+    ],
+    "contrastive": [
+      {
+        "query": "This test fails intermittently in CI; find the source of flakiness",
+        "expected_skill": "testing.flaky-test-debug",
+        "reason": "Nondeterministic test ordering is flaky-test debugging."
+      },
+      {
+        "query": "This command crashes on empty input; find and fix the bug",
+        "expected_skill": "coding.bug-fix",
+        "reason": "Failures that do not depend on timing use the bug-fix workflow."
+      }
+    ]
+  },
+  "tools": {
+    "required": [
+      "read_file",
+      "grep"
+    ],
+    "recommended": [
+      "glob",
+      "bash",
+      "edit_file"
+    ],
+    "forbidden": []
+  },
+  "conflicts_with": [
+    "coding.bug-fix"
+  ],
+  "relations": {
+    "dependencies": [],
+    "composes_with": [],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "medium",
+    "rollout_percent": 100
+  },
+  "exclusive_group": "debugging-specialist",
+  "token_budget": 1100,
+  "status": "active"
+}

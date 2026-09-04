@@ -1,1 +1,141 @@
-{"schema_version":1,"id":"quality.backward-compatibility","name":"Backward Compatibility Review","version":"1.0.0","summary":"Review a proposed or completed change for breaking API, schema, configuration, and behavior changes.","category":["quality","compatibility","review"],"tags":["backward compatibility","breaking change","deprecation","向后兼容","破坏性变更"],"aliases":["compatibility review","兼容性检查"],"intents":["check backward compatibility","检查是否存在破坏性变更"],"applies_when":["Compatibility impact is the explicit focus of review."],"not_when":["general code review","perform migration","普通代码审查","执行迁移"],"examples":{"positive":["Check whether this release breaks existing API clients","检查这次发布是否破坏现有 API 客户端"],"negative":["Implement the API v2 migration","审查代码风格"]},"tools":{"required":["read_file","grep"],"recommended":["glob"],"forbidden":["write_file","edit_file","edit_ast","bash","agent","undo_changes"]},"conflicts_with":["coding.code-review"],"exclusive_group":"review-mode","token_budget":900,"status":"active"}
+{
+  "schema_version": 2,
+  "id": "quality.backward-compatibility",
+  "name": "Backward Compatibility Review",
+  "version": "1.0.0",
+  "summary": "Review a proposed or completed change for breaking API, schema, configuration, and behavior changes.",
+  "layer": "workflow",
+  "category": [
+    "quality",
+    "compatibility",
+    "review"
+  ],
+  "tags": [
+    "backward compatibility",
+    "breaking change",
+    "deprecation",
+    "向后兼容",
+    "破坏性变更"
+  ],
+  "aliases": [
+    "compatibility review",
+    "兼容性检查"
+  ],
+  "intents": [
+    "check backward compatibility",
+    "检查是否存在破坏性变更"
+  ],
+  "signature": {
+    "domains": [
+      "quality",
+      "compatibility",
+      "review"
+    ],
+    "actions": [
+      "review",
+      "reviews",
+      "reviewing",
+      "inspect",
+      "inspecting",
+      "审查",
+      "评审",
+      "analyze",
+      "analyzes",
+      "analyzing",
+      "analysis",
+      "分析"
+    ],
+    "objects": [
+      "backward compatibility",
+      "breaking change",
+      "deprecation",
+      "api client",
+      "兼容性",
+      "破坏性变更"
+    ],
+    "artifacts": [
+      "diff",
+      "public api",
+      "schema"
+    ],
+    "outputs": [
+      "compatibility report",
+      "review findings"
+    ],
+    "constraints": [
+      "read only",
+      "no edits"
+    ]
+  },
+  "applies_when": [
+    "Compatibility impact is the explicit focus of review."
+  ],
+  "not_when": [
+    "general code review",
+    "perform migration",
+    "普通代码审查",
+    "执行迁移"
+  ],
+  "examples": {
+    "positive": [
+      "Check whether this release breaks existing API clients",
+      "审查这次改动是否破坏向后兼容性",
+      "检查这次发布是否破坏现有 API 客户端"
+    ],
+    "negative": [
+      "Perform the API migration to v2",
+      "执行接口迁移",
+      "Implement the API v2 migration",
+      "审查代码风格"
+    ],
+    "hard_negative": [
+      "Review these changes for readability and style",
+      "Audit this code for security vulnerabilities"
+    ],
+    "contrastive": [
+      {
+        "query": "Review these changes for correctness and readability",
+        "expected_skill": "coding.code-review",
+        "reason": "General quality review belongs to code-review."
+      },
+      {
+        "query": "Audit this authentication flow for security vulnerabilities",
+        "expected_skill": "security.code-audit",
+        "reason": "Security concerns route to the security audit."
+      }
+    ]
+  },
+  "tools": {
+    "required": [
+      "read_file",
+      "grep"
+    ],
+    "recommended": [
+      "glob"
+    ],
+    "forbidden": [
+      "write_file",
+      "edit_file",
+      "edit_ast",
+      "bash",
+      "agent",
+      "undo_changes"
+    ]
+  },
+  "conflicts_with": [
+    "coding.code-review"
+  ],
+  "relations": {
+    "dependencies": [],
+    "composes_with": [],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "low",
+    "rollout_percent": 100
+  },
+  "exclusive_group": "review-mode",
+  "token_budget": 900,
+  "status": "active"
+}

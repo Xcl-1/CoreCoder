@@ -7,6 +7,10 @@ from .base import Tool
 
 class ReadFileTool(Tool):
     name = "read_file"
+    input_types = ("file_path",)
+    output_type = "numbered_text"
+    permission_scope = "filesystem:read"
+    side_effect = "none"
     description = (
         "Read a file's contents with line numbers. "
         "Always read a file before editing it."

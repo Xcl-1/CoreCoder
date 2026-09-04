@@ -14,6 +14,10 @@ from .base import Tool
 
 class AgentTool(Tool):
     name = "agent"
+    input_types = ("task", "role")
+    output_type = "agent_result"
+    permission_scope = "agent:delegate"
+    side_effect = "delegated"
     description = (
         "Spawn a sub-agent to handle a complex sub-task independently. "
         "The sub-agent has its own context and tool access. Use this for: "

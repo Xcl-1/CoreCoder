@@ -9,6 +9,10 @@ from .changes import current_change_tracker, missing_parent_dirs
 
 class WriteFileTool(Tool):
     name = "write_file"
+    input_types = ("file_path", "text")
+    output_type = "write_result"
+    permission_scope = "filesystem:write"
+    side_effect = "local_write"
     description = (
         "Create a new file or completely overwrite an existing one. "
         "For small edits to existing files, prefer edit_file instead."

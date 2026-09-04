@@ -51,6 +51,12 @@ Homepage = "https://github.com/he-yufeng/CoreCoder"
 Repository = "https://github.com/he-yufeng/CoreCoder"
 Issues = "https://github.com/he-yufeng/CoreCoder/issues"
 
+[tool.pytest.ini_options]
+# smoke_tests/ holds manual scripts that need a real LLM, subprocesses and
+# network access — they must never be collected by a plain `pytest` run.
+testpaths = ["tests"]
+norecursedirs = ["smoke_tests", "replays", "article", "assets", ".corecoder"]
+
 [tool.ruff]
 line-length = 130
 target-version = "py310"

@@ -1,25 +1,118 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "python.test-debug",
   "name": "Python Test Failure Debugging",
   "version": "1.0.0",
   "summary": "Diagnose and fix failing Python tests, especially pytest failures.",
-  "category": ["coding", "testing", "python"],
-  "tags": ["python", "pytest", "test failure", "测试失败", "报错"],
-  "aliases": ["pytest debug", "测试排错"],
-  "intents": ["fix failing tests", "debug pytest", "修复测试失败", "分析 pytest 报错"],
-  "applies_when": ["A Python test fails or pytest reports an error."],
-  "not_when": ["write tests from scratch", "从零编写测试"],
+  "layer": "workflow",
+  "category": [
+    "coding",
+    "testing",
+    "python"
+  ],
+  "tags": [
+    "python",
+    "pytest",
+    "test failure",
+    "测试失败",
+    "报错"
+  ],
+  "aliases": [
+    "pytest debug",
+    "测试排错"
+  ],
+  "intents": [
+    "fix failing tests",
+    "debug pytest",
+    "修复测试失败",
+    "分析 pytest 报错"
+  ],
+  "signature": {
+    "domains": [
+      "testing"
+    ],
+    "actions": [
+      "debug",
+      "debugs",
+      "debugging",
+      "diagnose",
+      "diagnosing",
+      "fix",
+      "fixes",
+      "fixing",
+      "排查",
+      "修复"
+    ],
+    "objects": [
+      "pytest",
+      "test failure",
+      "test failures",
+      "failing test",
+      "failing tests",
+      "tests are failing",
+      "python test",
+      "python tests",
+      "测试失败"
+    ],
+    "artifacts": [
+      "Python test"
+    ],
+    "outputs": [
+      "passing tests",
+      "root cause"
+    ],
+    "constraints": []
+  },
+  "applies_when": [
+    "A Python test fails or pytest reports an error."
+  ],
+  "not_when": [
+    "write tests from scratch",
+    "从零编写测试"
+  ],
   "examples": {
-    "positive": ["pytest is failing with this traceback, find the root cause", "这个 pytest 测试失败了，请定位并修复"],
-    "negative": ["Add unit tests for this new module", "为这个模块从零补充测试"]
+    "positive": [
+      "pytest is failing with this traceback, find the root cause",
+      "这个 pytest 测试失败了，请定位并修复"
+    ],
+    "negative": [
+      "Add unit tests for this new module",
+      "为这个模块从零补充测试"
+    ],
+    "hard_negative": [
+      "Create tests for uncovered behavior"
+    ],
+    "contrastive": [
+      {
+        "query": "Add new unit tests for parser edge cases",
+        "expected_skill": "testing.test-generation",
+        "reason": "Creating tests is distinct from debugging existing failures."
+      }
+    ]
   },
   "tools": {
-    "required": ["read_file", "grep", "bash"],
-    "recommended": ["edit_file", "glob"],
+    "required": [
+      "read_file",
+      "grep",
+      "bash"
+    ],
+    "recommended": [
+      "edit_file",
+      "glob"
+    ],
     "forbidden": []
   },
   "exclusive_group": "python-test-workflow",
+  "relations": {
+    "dependencies": [],
+    "composes_with": [],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "medium",
+    "rollout_percent": 100
+  },
   "token_budget": 1000,
   "status": "active"
 }

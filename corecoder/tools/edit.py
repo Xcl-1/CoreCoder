@@ -19,6 +19,10 @@ _changed_files = default_change_tracker().changed_files
 
 class EditFileTool(Tool):
     name = "edit_file"
+    input_types = ("file_path", "text_patch")
+    output_type = "diff"
+    permission_scope = "filesystem:write"
+    side_effect = "local_write"
     description = (
         "Edit a file by replacing an exact string match. "
         "old_string must appear exactly once in the file for safety. "

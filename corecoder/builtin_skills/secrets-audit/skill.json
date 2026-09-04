@@ -1,1 +1,140 @@
-{"schema_version":1,"id":"security.secrets-audit","name":"Secrets Exposure Audit","version":"1.0.0","summary":"Perform a read-only audit for embedded credentials, unsafe secret handling, logging, and configuration exposure.","category":["security","secrets","audit"],"tags":["secret scanning","credential leak","API key","密钥泄露","凭证审计"],"aliases":["audit secrets","检查密钥"],"intents":["find exposed secrets","检查仓库中的密钥泄露"],"applies_when":["The user explicitly requests credential or secret exposure analysis."],"not_when":["general security audit","configure secrets","普通安全审计","配置密钥"],"examples":{"positive":["Audit this repository for exposed credentials and unsafe secret logging","检查仓库是否泄露凭证或在日志中输出密钥"],"negative":["Perform a general authentication security review","配置生产环境 API key"]},"tools":{"required":["read_file","grep"],"recommended":["glob"],"forbidden":["write_file","edit_file","edit_ast","bash","agent","undo_changes"]},"conflicts_with":["security.code-audit"],"exclusive_group":"review-mode","token_budget":900,"status":"active"}
+{
+  "schema_version": 2,
+  "id": "security.secrets-audit",
+  "name": "Secrets Exposure Audit",
+  "version": "1.0.0",
+  "summary": "Perform a read-only audit for embedded credentials, unsafe secret handling, logging, and configuration exposure.",
+  "layer": "workflow",
+  "category": [
+    "security",
+    "secrets",
+    "audit"
+  ],
+  "tags": [
+    "secret scanning",
+    "credential leak",
+    "API key",
+    "密钥泄露",
+    "凭证审计"
+  ],
+  "aliases": [
+    "audit secrets",
+    "检查密钥"
+  ],
+  "intents": [
+    "find exposed secrets",
+    "检查仓库中的密钥泄露"
+  ],
+  "signature": {
+    "domains": [
+      "security",
+      "secrets",
+      "audit"
+    ],
+    "actions": [
+      "audit",
+      "audits",
+      "auditing",
+      "审计",
+      "scan",
+      "scans",
+      "scanning",
+      "扫描"
+    ],
+    "objects": [
+      "secret",
+      "secrets",
+      "credential",
+      "api key",
+      "token",
+      "password",
+      "密钥",
+      "凭证",
+      "密码"
+    ],
+    "artifacts": [
+      ".env",
+      "config file",
+      "git history",
+      "source code"
+    ],
+    "outputs": [
+      "audit report",
+      "remediation list"
+    ],
+    "constraints": [
+      "read only"
+    ]
+  },
+  "applies_when": [
+    "The user explicitly requests credential or secret exposure analysis."
+  ],
+  "not_when": [
+    "general security audit",
+    "configure secrets",
+    "普通安全审计",
+    "配置密钥"
+  ],
+  "examples": {
+    "positive": [
+      "Audit this repository for exposed credentials and unsafe secret logging",
+      "检查仓库是否存在密钥泄露",
+      "检查仓库是否泄露凭证或在日志中输出密钥"
+    ],
+    "negative": [
+      "Configure secrets for the CI pipeline",
+      "配置 CI 密钥",
+      "Perform a general authentication security review",
+      "配置生产环境 API key"
+    ],
+    "hard_negative": [
+      "Audit this authentication flow for security vulnerabilities",
+      "Audit our locked dependencies for security and provenance risk"
+    ],
+    "contrastive": [
+      {
+        "query": "Audit this authentication flow for security vulnerabilities",
+        "expected_skill": "security.code-audit",
+        "reason": "Source-code vulnerability review is the general security audit."
+      },
+      {
+        "query": "Audit our locked dependencies for security and provenance risk",
+        "expected_skill": "security.dependency-audit",
+        "reason": "Package and supply-chain exposure is the dependency audit."
+      }
+    ]
+  },
+  "tools": {
+    "required": [
+      "read_file",
+      "grep"
+    ],
+    "recommended": [
+      "glob"
+    ],
+    "forbidden": [
+      "write_file",
+      "edit_file",
+      "edit_ast",
+      "bash",
+      "agent",
+      "undo_changes"
+    ]
+  },
+  "conflicts_with": [
+    "security.code-audit"
+  ],
+  "relations": {
+    "dependencies": [],
+    "composes_with": [],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "low",
+    "rollout_percent": 100
+  },
+  "exclusive_group": "review-mode",
+  "token_budget": 900,
+  "status": "active"
+}

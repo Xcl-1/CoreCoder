@@ -14,4 +14,5 @@ async def test():
     print('read:', results[1][:200])
     print('\n异步工具测试通过!')
 
-asyncio.run(test())
+if __name__ == "__main__":
+    asyncio.run(test())

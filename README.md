@@ -187,7 +187,7 @@ Inside the REPL, `/help` lists everything; these are the ones you'll reach for:
 /memory          inspect memories and pending reflections
 /memory show <id> / search <query> / archive <id> / approve <id> / reflect
 /skills          list built-in, user, and project skills
-/skill search <query> / show <id> / use <id> / unuse <id> / explain
+/skill search <query> / show <id> / use <id> / unuse <id> / explain / audit
 quit / exit      exit (Ctrl+C cancels the current round)
 ```
 
@@ -201,9 +201,15 @@ Procedure memories require a real successful tool execution with exact verificat
 
 ### Skills
 
-Skills are reusable task guidance layered above atomic tools. CoreCoder discovers built-ins from the package, user skills from `~/.corecoder/skills`, and project skills from `.corecoder/skills`; higher scopes override the same skill ID. Each package contains a small `skill.json` manifest and a full `SKILL.md`. Routing first recalls candidates from IDs, tags, intents, aliases, boundaries, and positive/negative examples, then ranks them by task fit, scope, tool availability, conflicts, and prompt cost. Only selected instructions enter the model context. Use `$skill.id` in a request or `/skill use <id>` to select one explicitly, and `/skill explain` to inspect the previous route. Skill tool restrictions can only remove tools and all execution still passes through the normal security guard.
+Skills are reusable task guidance layered above atomic tools and classified as `atomic`, `workflow`, or `orchestrator`. CoreCoder discovers built-ins from the package, user skills from `~/.corecoder/skills`, and project skills from `.corecoder/skills`; higher scopes override the same skill ID. Each package contains a compact `skill.json` catalog manifest and full `SKILL.md` instructions.
 
-Set `CORECODER_SKILLS=0` to disable routing. `CORECODER_SKILLS_DIR`, `CORECODER_SKILL_TOP_K`, `CORECODER_SKILL_MAX_ACTIVE`, and `CORECODER_SKILL_PROMPT_CHARS` control the user directory and routing budgets.
+Routing uses progressive “2+1” disclosure. A compact in-memory inverted catalog first merges exact, tag/signature, context, contrastive, and optional semantic recall into a small candidate set. Metadata-only reranking then considers positive and hard-negative examples; tool, input, context, and permission prerequisites; dependency/conflict edges; historical-failure penalties; scope; and prompt cost. Only selected `SKILL.md` files enter model context. A manifest can declare `resource_modes` so only references matching the current mode are read and only that mode's script/asset paths are exposed. By default there is one automatic primary skill and up to two supporting skills, which must be connected through `dependencies` or `composes_with`.
+
+Route decisions are `explicit`, `auto`, `clarify`, or `abstain`. High-confidence, well-separated v2 matches activate automatically; medium-confidence or close alternatives return exactly one clarification without calling the LLM or exposing tools; weak matches load no skill. Use `$skill.id` or `/skill use <id>` to select explicitly, and say `do not use $skill.id` to exclude it for one turn. `/skill explain` shows recall/rerank scores, confidence, task signature, and rejection reasons; `/skill audit` reports missing, cyclic, contradictory, superseded, and high-overlap definitions. Skill tool restrictions can only remove tools. High-risk skills require confirmation before the first state-changing tool, in addition to the normal security guard.
+
+Schema-v2 manifests can progressively add `layer`, structured `signature` dimensions, `requires`, `resource_modes`, `examples.hard_negative`, `examples.contrastive`, `relations`, and `routing` policy while schema v1 remains compatible. Host applications can provide attachment/artifact, input, connected-app, live-app, permission, external-write, risk, intent-mode, and stable rollout-key context. The lifecycle supports `draft → candidate → shadow → canary → active → deprecated`: shadow skills are scored but never activated, canary rollout uses a stable key and `rollout_percent`, `supersedes` redirects obsolete implicit matches, and `SkillManager.transition` validates and audits editable-skill promotion or rollback. `corecoder.skills.evaluate_router` reports positive-case Precision@1, overall accuracy, false activations, missed skills, clarification and override rates, task success, confidence margin, P95 latency, high-risk confirmation, shadow comparison, candidate count, and estimated loaded tokens.
+
+Set `CORECODER_SKILLS=0` to disable routing. `CORECODER_SKILLS_DIR`, `CORECODER_SKILL_TOP_K`, `CORECODER_SKILL_MAX_ACTIVE`, and `CORECODER_SKILL_PROMPT_CHARS` control the user directory and routing budgets. `CORECODER_SKILL_MIN_SCORE` (default `0.24`) is the candidate floor; `CORECODER_SKILL_CLARIFY_CONFIDENCE` (default `0.65`), `CORECODER_SKILL_AUTO_CONFIDENCE` (default `0.82`), and `CORECODER_SKILL_AMBIGUITY_MARGIN` (default `0.12`) control abstention, clarification, and automatic activation.
 
 ## Related Projects
 

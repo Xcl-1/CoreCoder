@@ -1,25 +1,141 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "repository.architecture-analysis",
   "name": "Repository Architecture Analysis",
   "version": "1.0.0",
   "summary": "Explain a repository's architecture, component responsibilities, dependencies, and important execution flows.",
-  "category": ["repository", "architecture", "analysis"],
-  "tags": ["architecture", "codebase", "dependency", "架构分析", "代码库", "调用链"],
-  "aliases": ["explain codebase", "项目架构分析"],
-  "intents": ["explain this repository architecture", "trace this execution flow", "分析项目架构", "梳理调用链"],
-  "applies_when": ["The user wants to understand structure or execution flow without requesting implementation."],
-  "not_when": ["implement feature", "fix bug", "code review", "实现功能", "修复缺陷", "代码审查"],
+  "layer": "workflow",
+  "category": [
+    "repository",
+    "architecture",
+    "analysis"
+  ],
+  "tags": [
+    "architecture",
+    "codebase",
+    "dependency",
+    "架构分析",
+    "代码库",
+    "调用链"
+  ],
+  "aliases": [
+    "explain codebase",
+    "understand repository",
+    "项目架构分析",
+    "理解代码库"
+  ],
+  "intents": [
+    "explain this repository architecture",
+    "understand this repository",
+    "trace this execution flow",
+    "分析项目架构",
+    "理解这个代码库",
+    "梳理调用链"
+  ],
+  "signature": {
+    "domains": [
+      "repository",
+      "architecture",
+      "analysis"
+    ],
+    "actions": [
+      "explain",
+      "explains",
+      "explaining",
+      "analyze",
+      "analyzes",
+      "analyzing",
+      "understand",
+      "understands",
+      "understanding",
+      "trace",
+      "traces",
+      "tracing",
+      "解释",
+      "分析",
+      "理解",
+      "梳理"
+    ],
+    "objects": [
+      "repository",
+      "architecture",
+      "codebase",
+      "execution flow",
+      "代码库",
+      "项目架构",
+      "调用链"
+    ],
+    "artifacts": [
+      "source repository"
+    ],
+    "outputs": [
+      "architecture explanation",
+      "execution flow"
+    ],
+    "constraints": [
+      "read only",
+      "without implementation"
+    ]
+  },
+  "applies_when": [
+    "The user wants to understand structure or execution flow without requesting implementation."
+  ],
+  "not_when": [
+    "implement feature",
+    "fix bug",
+    "code review",
+    "实现功能",
+    "修复缺陷",
+    "代码审查"
+  ],
   "examples": {
-    "positive": ["Explain how requests flow through this codebase", "梳理这个项目的核心模块和调用流程"],
-    "negative": ["Add a new endpoint to this service", "审查这次代码修改"]
+    "positive": [
+      "Explain how requests flow through this codebase",
+      "梳理这个项目的核心模块和调用流程"
+    ],
+    "negative": [
+      "Add a new endpoint to this service",
+      "审查这次代码修改"
+    ],
+    "hard_negative": [
+      "Implement a feature",
+      "Review these changes for bugs"
+    ],
+    "contrastive": [
+      {
+        "query": "Review these code changes for correctness",
+        "expected_skill": "coding.code-review",
+        "reason": "Reviewing a change is different from explaining repository architecture."
+      }
+    ]
   },
   "tools": {
-    "required": ["read_file", "grep"],
-    "recommended": ["glob"],
-    "forbidden": ["write_file", "edit_file", "edit_ast", "bash", "undo_changes"]
+    "required": [
+      "read_file",
+      "grep"
+    ],
+    "recommended": [
+      "glob"
+    ],
+    "forbidden": [
+      "write_file",
+      "edit_file",
+      "edit_ast",
+      "bash",
+      "undo_changes"
+    ]
   },
   "exclusive_group": "analysis-mode",
+  "relations": {
+    "dependencies": [],
+    "composes_with": [],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "low",
+    "rollout_percent": 100
+  },
   "token_budget": 900,
   "status": "active"
 }

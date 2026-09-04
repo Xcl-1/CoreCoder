@@ -1,1 +1,141 @@
-{"schema_version":1,"id":"testing.flaky-test-debug","name":"Flaky Test Debugging","version":"1.0.0","summary":"Diagnose nondeterministic tests caused by ordering, time, randomness, shared state, or external dependencies.","category":["testing","debugging","reliability"],"tags":["flaky test","intermittent failure","nondeterministic","测试不稳定","偶发失败"],"aliases":["debug flaky tests","排查偶发测试"],"intents":["fix this flaky test","排查测试偶发失败"],"applies_when":["A test passes and fails across runs or environments without an intended code change."],"not_when":["consistently failing test","write new tests","稳定失败测试","新增测试"],"examples":{"positive":["This test fails intermittently in CI; find the source of flakiness","这个测试在 CI 中偶发失败，请定位原因"],"negative":["This pytest always fails with the same assertion","为解析器新增单元测试"]},"tools":{"required":["read_file","grep","bash"],"recommended":["glob","edit_file"],"forbidden":[]},"conflicts_with":["python.test-debug","testing.test-generation","devops.ci-cd-debug"],"exclusive_group":"python-test-workflow","token_budget":1000,"status":"active"}
+{
+  "schema_version": 2,
+  "id": "testing.flaky-test-debug",
+  "name": "Flaky Test Debugging",
+  "version": "1.0.0",
+  "summary": "Diagnose nondeterministic tests caused by ordering, time, randomness, shared state, or external dependencies.",
+  "layer": "workflow",
+  "category": [
+    "testing",
+    "debugging",
+    "reliability"
+  ],
+  "tags": [
+    "flaky test",
+    "intermittent failure",
+    "nondeterministic",
+    "测试不稳定",
+    "偶发失败"
+  ],
+  "aliases": [
+    "debug flaky tests",
+    "排查偶发测试"
+  ],
+  "intents": [
+    "fix this flaky test",
+    "排查测试偶发失败"
+  ],
+  "signature": {
+    "domains": [
+      "testing",
+      "debugging",
+      "reliability"
+    ],
+    "actions": [
+      "diagnose",
+      "diagnosing",
+      "debug",
+      "debugging",
+      "排查",
+      "定位",
+      "诊断",
+      "reproduce",
+      "reproduces",
+      "reproducing",
+      "复现"
+    ],
+    "objects": [
+      "flaky test",
+      "intermittent failure",
+      "flakiness",
+      "test ordering",
+      "shared state",
+      "测试不稳定",
+      "偶发失败"
+    ],
+    "artifacts": [
+      "test suite"
+    ],
+    "outputs": [
+      "root cause",
+      "test fix"
+    ],
+    "constraints": [
+      "reproduce first",
+      "nondeterministic"
+    ]
+  },
+  "applies_when": [
+    "A test passes and fails across runs or environments without an intended code change."
+  ],
+  "not_when": [
+    "consistently failing test",
+    "write new tests",
+    "稳定失败测试",
+    "新增测试"
+  ],
+  "examples": {
+    "positive": [
+      "This test fails intermittently in CI; find the source of flakiness",
+      "排查测试偶发失败",
+      "这个测试在 CI 中偶发失败，请定位原因"
+    ],
+    "negative": [
+      "Add unit tests for the parser edge cases",
+      "新增测试",
+      "This pytest always fails with the same assertion",
+      "为解析器新增单元测试"
+    ],
+    "hard_negative": [
+      "pytest is failing with a traceback after my change",
+      "Add integration tests for the API and database transaction"
+    ],
+    "contrastive": [
+      {
+        "query": "pytest is failing with a traceback after my change",
+        "expected_skill": "python.test-debug",
+        "reason": "A deterministic test failure uses the standard test-debug workflow."
+      },
+      {
+        "query": "Add unit tests for the parser edge cases",
+        "expected_skill": "testing.test-generation",
+        "reason": "Writing new tests is test generation."
+      },
+      {
+        "query": "Find the race condition causing duplicate writes",
+        "expected_skill": "debugging.concurrency",
+        "reason": "Concurrency defects in product code are not test flakiness."
+      }
+    ]
+  },
+  "tools": {
+    "required": [
+      "read_file",
+      "grep",
+      "bash"
+    ],
+    "recommended": [
+      "glob",
+      "edit_file"
+    ],
+    "forbidden": []
+  },
+  "conflicts_with": [
+    "python.test-debug",
+    "testing.test-generation",
+    "devops.ci-cd-debug"
+  ],
+  "relations": {
+    "dependencies": [],
+    "composes_with": [],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "medium",
+    "rollout_percent": 100
+  },
+  "exclusive_group": "python-test-workflow",
+  "token_budget": 1000,
+  "status": "active"
+}

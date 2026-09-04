@@ -2,6 +2,9 @@
 
 import asyncio
 from abc import ABC
+from typing import Literal
+
+ToolSideEffect = Literal["none", "local_write", "dynamic", "delegated"]
 
 
 class Tool(ABC):
@@ -18,6 +21,10 @@ class Tool(ABC):
     name: str
     description: str
     parameters: dict  # JSON Schema for the function args
+    input_types: tuple[str, ...] = ()
+    output_type: str = "text"
+    permission_scope: str = "workspace"
+    side_effect: ToolSideEffect = "dynamic"
 
     async def execute(self, **kwargs) -> str:
         """Run the tool and return a text result.

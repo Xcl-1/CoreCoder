@@ -52,8 +52,12 @@ class Config:
     skills_enabled: bool = True
     skills_dir: Path = Path.home() / ".corecoder" / "skills"
     skill_top_k: int = 10
-    skill_max_active: int = 2
+    skill_max_active: int = 3
     skill_prompt_chars: int = 6_000
+    skill_min_score: float = 0.24
+    skill_auto_confidence: float = 0.82
+    skill_clarify_confidence: float = 0.65
+    skill_ambiguity_margin: float = 0.12
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -74,8 +78,12 @@ class Config:
         memory_top_k_raw = os.getenv("CORECODER_MEMORY_TOP_K", "5")
         skills_raw = os.getenv("CORECODER_SKILLS", "1").strip().lower()
         skill_top_k_raw = os.getenv("CORECODER_SKILL_TOP_K", "10")
-        skill_max_active_raw = os.getenv("CORECODER_SKILL_MAX_ACTIVE", "2")
+        skill_max_active_raw = os.getenv("CORECODER_SKILL_MAX_ACTIVE", "3")
         skill_prompt_chars_raw = os.getenv("CORECODER_SKILL_PROMPT_CHARS", "6000")
+        skill_min_score_raw = os.getenv("CORECODER_SKILL_MIN_SCORE", "0.24")
+        skill_auto_confidence_raw = os.getenv("CORECODER_SKILL_AUTO_CONFIDENCE", "0.82")
+        skill_clarify_confidence_raw = os.getenv("CORECODER_SKILL_CLARIFY_CONFIDENCE", "0.65")
+        skill_ambiguity_margin_raw = os.getenv("CORECODER_SKILL_AMBIGUITY_MARGIN", "0.12")
 
         # --- validation --------------------------------------------------
         try:
@@ -140,6 +148,13 @@ class Config:
             skill_prompt_chars = int(skill_prompt_chars_raw)
         except ValueError as exc:
             raise ValueError("Skill limits must be integers") from exc
+        try:
+            skill_min_score = float(skill_min_score_raw)
+            skill_auto_confidence = float(skill_auto_confidence_raw)
+            skill_clarify_confidence = float(skill_clarify_confidence_raw)
+            skill_ambiguity_margin = float(skill_ambiguity_margin_raw)
+        except ValueError as exc:
+            raise ValueError("Skill routing thresholds must be numbers") from exc
         if not (1 <= skill_top_k <= 50):
             raise ValueError(f"CORECODER_SKILL_TOP_K must be 1-50, got: {skill_top_k}")
         if not (1 <= skill_max_active <= 5):
@@ -150,6 +165,20 @@ class Config:
             raise ValueError(
                 "CORECODER_SKILL_PROMPT_CHARS must be 1000-50000, "
                 f"got: {skill_prompt_chars}"
+            )
+        if not (0 <= skill_min_score <= 2):
+            raise ValueError(
+                f"CORECODER_SKILL_MIN_SCORE must be 0-2, got: {skill_min_score}"
+            )
+        if not (0 <= skill_ambiguity_margin <= 1):
+            raise ValueError(
+                "CORECODER_SKILL_AMBIGUITY_MARGIN must be 0-1, "
+                f"got: {skill_ambiguity_margin}"
+            )
+        if not (0 <= skill_clarify_confidence <= skill_auto_confidence <= 1):
+            raise ValueError(
+                "Skill confidence thresholds must satisfy 0 <= clarify <= auto <= 1, "
+                f"got clarify={skill_clarify_confidence}, auto={skill_auto_confidence}"
             )
 
         return cls(
@@ -168,4 +197,8 @@ class Config:
             skill_top_k=skill_top_k,
             skill_max_active=skill_max_active,
             skill_prompt_chars=skill_prompt_chars,
+            skill_min_score=skill_min_score,
+            skill_auto_confidence=skill_auto_confidence,
+            skill_clarify_confidence=skill_clarify_confidence,
+            skill_ambiguity_margin=skill_ambiguity_margin,
         )

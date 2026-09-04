@@ -1,1 +1,136 @@
-{"schema_version":1,"id":"maintenance.dead-code-cleanup","name":"Dead Code Cleanup","version":"1.0.0","summary":"Remove demonstrably unused code, dependencies, flags, and compatibility paths with regression checks.","category":["maintenance","cleanup","coding"],"tags":["dead code","unused dependency","cleanup","死代码","无用依赖","代码清理"],"aliases":["remove unused code","清理代码"],"intents":["remove dead code","清理无用代码和依赖"],"applies_when":["The user asks to remove code or dependencies proven unused."],"not_when":["general refactor","performance optimization","普通重构","性能优化"],"examples":{"positive":["Remove unused modules and dependencies from this package","清理项目中没有使用的模块和依赖"],"negative":["Reorganize this module without deleting behavior","优化这个热点循环"]},"tools":{"required":["read_file","grep"],"recommended":["glob","edit_file","bash"],"forbidden":[]},"exclusive_group":"maintenance-change","token_budget":900,"status":"active"}
+{
+  "schema_version": 2,
+  "id": "maintenance.dead-code-cleanup",
+  "name": "Dead Code Cleanup",
+  "version": "1.0.0",
+  "summary": "Remove demonstrably unused code, dependencies, flags, and compatibility paths with regression checks.",
+  "layer": "workflow",
+  "category": [
+    "maintenance",
+    "cleanup",
+    "coding"
+  ],
+  "tags": [
+    "dead code",
+    "unused dependency",
+    "cleanup",
+    "死代码",
+    "无用依赖",
+    "代码清理"
+  ],
+  "aliases": [
+    "remove unused code",
+    "清理代码"
+  ],
+  "intents": [
+    "remove dead code",
+    "清理无用代码和依赖"
+  ],
+  "signature": {
+    "domains": [
+      "maintenance",
+      "cleanup",
+      "coding"
+    ],
+    "actions": [
+      "remove",
+      "removes",
+      "removing",
+      "cleanup",
+      "清理",
+      "移除",
+      "删除",
+      "analyze",
+      "analyzes",
+      "analyzing",
+      "analysis",
+      "分析"
+    ],
+    "objects": [
+      "dead code",
+      "unused code",
+      "unused module",
+      "unused dependency",
+      "feature flag",
+      "无用代码",
+      "冗余"
+    ],
+    "artifacts": [
+      "source code",
+      "package manifest"
+    ],
+    "outputs": [
+      "code removal",
+      "cleanup diff"
+    ],
+    "constraints": [
+      "proven unused",
+      "regression checked"
+    ]
+  },
+  "applies_when": [
+    "The user asks to remove code or dependencies proven unused."
+  ],
+  "not_when": [
+    "general refactor",
+    "performance optimization",
+    "普通重构",
+    "性能优化"
+  ],
+  "examples": {
+    "positive": [
+      "Remove unused modules and dependencies from this package",
+      "清理不再使用的代码和依赖",
+      "清理项目中没有使用的模块和依赖"
+    ],
+    "negative": [
+      "Refactor this module into smaller functions",
+      "普通重构",
+      "Reorganize this module without deleting behavior",
+      "优化这个热点循环"
+    ],
+    "hard_negative": [
+      "Refactor this module into smaller functions without behavior change",
+      "Profile and reduce the parser latency"
+    ],
+    "contrastive": [
+      {
+        "query": "Refactor the parser module into smaller functions",
+        "expected_skill": "coding.safe-refactor",
+        "reason": "Structural change without removal is refactoring."
+      },
+      {
+        "query": "Upgrade Pydantic to the next major version",
+        "expected_skill": "maintenance.dependency-upgrade",
+        "reason": "Version upgrades route to dependency upgrade."
+      }
+    ]
+  },
+  "tools": {
+    "required": [
+      "read_file",
+      "grep"
+    ],
+    "recommended": [
+      "glob",
+      "edit_file",
+      "bash"
+    ],
+    "forbidden": []
+  },
+  "relations": {
+    "dependencies": [],
+    "composes_with": [
+      "coding.safe-refactor"
+    ],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "medium",
+    "rollout_percent": 100
+  },
+  "exclusive_group": "maintenance-change",
+  "token_budget": 900,
+  "status": "active"
+}

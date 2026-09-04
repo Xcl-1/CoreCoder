@@ -1,1 +1,135 @@
-{"schema_version":1,"id":"quality.error-handling-hardening","name":"Error Handling Hardening","version":"1.0.0","summary":"Improve failure classification, propagation, cleanup, retries, and user-facing diagnostics.","category":["quality","reliability","coding"],"tags":["error handling","retry","exception","reliability","错误处理","重试"],"aliases":["harden errors","完善异常处理"],"intents":["improve error handling","完善失败处理和重试"],"applies_when":["The request targets robustness of failure paths rather than one reported defect."],"not_when":["fix one bug","debug failing test","修复单个缺陷","测试排错"],"examples":{"positive":["Improve timeout handling and retry behavior in this client","完善客户端的超时处理和重试策略"],"negative":["Fix this specific KeyError","pytest 失败了"]},"tools":{"required":["read_file","grep"],"recommended":["glob","edit_file","bash"],"forbidden":[]},"exclusive_group":"implementation-mode","token_budget":1000,"status":"active"}
+{
+  "schema_version": 2,
+  "id": "quality.error-handling-hardening",
+  "name": "Error Handling Hardening",
+  "version": "1.0.0",
+  "summary": "Improve failure classification, propagation, cleanup, retries, and user-facing diagnostics.",
+  "layer": "workflow",
+  "category": [
+    "quality",
+    "reliability",
+    "coding"
+  ],
+  "tags": [
+    "error handling",
+    "retry",
+    "exception",
+    "reliability",
+    "错误处理",
+    "重试"
+  ],
+  "aliases": [
+    "harden errors",
+    "完善异常处理"
+  ],
+  "intents": [
+    "improve error handling",
+    "完善失败处理和重试"
+  ],
+  "signature": {
+    "domains": [
+      "quality",
+      "reliability",
+      "coding"
+    ],
+    "actions": [
+      "implement",
+      "implementing",
+      "add",
+      "adds",
+      "adding",
+      "实现",
+      "新增",
+      "添加",
+      "harden",
+      "hardening",
+      "加固"
+    ],
+    "objects": [
+      "error handling",
+      "exception",
+      "retry",
+      "timeout",
+      "cleanup",
+      "diagnostics",
+      "错误处理",
+      "重试",
+      "超时"
+    ],
+    "artifacts": [
+      "source code"
+    ],
+    "outputs": [
+      "hardened code",
+      "error taxonomy"
+    ],
+    "constraints": [
+      "preserve behavior"
+    ]
+  },
+  "applies_when": [
+    "The request targets robustness of failure paths rather than one reported defect."
+  ],
+  "not_when": [
+    "fix one bug",
+    "debug failing test",
+    "修复单个缺陷",
+    "测试排错"
+  ],
+  "examples": {
+    "positive": [
+      "Improve timeout handling and retry behavior in this client",
+      "完善失败处理和重试逻辑",
+      "完善客户端的超时处理和重试策略"
+    ],
+    "negative": [
+      "Fix this single crash on empty input",
+      "修复单个缺陷",
+      "Fix this specific KeyError",
+      "pytest 失败了"
+    ],
+    "hard_negative": [
+      "Add structured logs and latency metrics to this request path",
+      "This command crashes on empty input; find and fix the bug"
+    ],
+    "contrastive": [
+      {
+        "query": "This command crashes on empty input; find and fix the bug",
+        "expected_skill": "coding.bug-fix",
+        "reason": "A single incorrect behavior uses the bug-fix workflow."
+      },
+      {
+        "query": "Add structured logs and latency metrics to this request path",
+        "expected_skill": "reliability.logging-observability",
+        "reason": "Operational signals belong to logging and observability."
+      }
+    ]
+  },
+  "tools": {
+    "required": [
+      "read_file",
+      "grep"
+    ],
+    "recommended": [
+      "glob",
+      "edit_file",
+      "bash"
+    ],
+    "forbidden": []
+  },
+  "relations": {
+    "dependencies": [],
+    "composes_with": [
+      "coding.bug-fix"
+    ],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "medium",
+    "rollout_percent": 100
+  },
+  "exclusive_group": "implementation-mode",
+  "token_budget": 1000,
+  "status": "active"
+}

@@ -1,25 +1,154 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "security.code-audit",
   "name": "Security Code Audit",
   "version": "1.0.0",
   "summary": "Perform a read-only security-focused audit of trust boundaries, inputs, permissions, and sensitive operations.",
-  "category": ["security", "coding", "audit"],
-  "tags": ["security", "vulnerability", "audit", "安全审计", "漏洞", "权限"],
-  "aliases": ["security review", "安全检查"],
-  "intents": ["audit this code for security issues", "find vulnerabilities", "进行安全审计", "检查安全漏洞"],
-  "applies_when": ["The user explicitly requests security analysis or vulnerability review."],
-  "not_when": ["general code review", "implement security feature", "普通代码审查", "实现安全功能"],
+  "layer": "workflow",
+  "category": [
+    "security",
+    "coding",
+    "audit"
+  ],
+  "tags": [
+    "security",
+    "vulnerability",
+    "audit",
+    "安全审计",
+    "漏洞",
+    "权限"
+  ],
+  "aliases": [
+    "security review",
+    "安全检查"
+  ],
+  "intents": [
+    "audit this code for security issues",
+    "find vulnerabilities",
+    "进行安全审计",
+    "检查安全漏洞"
+  ],
+  "signature": {
+    "domains": [
+      "security",
+      "coding",
+      "audit"
+    ],
+    "actions": [
+      "audit",
+      "audits",
+      "auditing",
+      "审计",
+      "review",
+      "reviews",
+      "reviewing",
+      "inspect",
+      "inspecting",
+      "审查",
+      "评审"
+    ],
+    "objects": [
+      "vulnerability",
+      "vulnerabilities",
+      "injection",
+      "permission",
+      "permissions",
+      "trust boundary",
+      "authentication",
+      "authorization",
+      "security",
+      "security issue",
+      "security issues",
+      "安全漏洞",
+      "权限",
+      "安全问题"
+    ],
+    "artifacts": [
+      "source code",
+      "diff"
+    ],
+    "outputs": [
+      "audit report",
+      "vulnerability list"
+    ],
+    "constraints": [
+      "read only",
+      "no edits"
+    ]
+  },
+  "applies_when": [
+    "The user explicitly requests security analysis or vulnerability review."
+  ],
+  "not_when": [
+    "general code review",
+    "implement security feature",
+    "普通代码审查",
+    "实现安全功能"
+  ],
   "examples": {
-    "positive": ["Audit this authentication flow for security vulnerabilities", "审计这个鉴权流程是否存在安全漏洞"],
-    "negative": ["Review this refactor for correctness", "给登录页增加双因素认证"]
+    "positive": [
+      "Audit this authentication flow for security vulnerabilities",
+      "进行安全审计并检查权限漏洞",
+      "审计这个鉴权流程是否存在安全漏洞"
+    ],
+    "negative": [
+      "Implement the authentication feature",
+      "实现安全功能",
+      "Review this refactor for correctness",
+      "给登录页增加双因素认证"
+    ],
+    "hard_negative": [
+      "Review these changes for correctness and readability",
+      "Audit this repository for exposed credentials and unsafe secret logging"
+    ],
+    "contrastive": [
+      {
+        "query": "Review these changes for correctness and readability",
+        "expected_skill": "coding.code-review",
+        "reason": "General quality review belongs to code-review."
+      },
+      {
+        "query": "Audit this repository for exposed credentials and unsafe secret logging",
+        "expected_skill": "security.secrets-audit",
+        "reason": "Embedded secrets route to the secrets audit."
+      },
+      {
+        "query": "Audit our locked dependencies for security and provenance risk",
+        "expected_skill": "security.dependency-audit",
+        "reason": "Third-party package risk is the dependency audit."
+      }
+    ]
   },
   "tools": {
-    "required": ["read_file", "grep"],
-    "recommended": ["glob"],
-    "forbidden": ["write_file", "edit_file", "edit_ast", "bash", "agent", "undo_changes"]
+    "required": [
+      "read_file",
+      "grep"
+    ],
+    "recommended": [
+      "glob"
+    ],
+    "forbidden": [
+      "write_file",
+      "edit_file",
+      "edit_ast",
+      "bash",
+      "agent",
+      "undo_changes"
+    ]
   },
-  "conflicts_with": ["coding.code-review"],
+  "conflicts_with": [
+    "coding.code-review"
+  ],
+  "relations": {
+    "dependencies": [],
+    "composes_with": [],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "low",
+    "rollout_percent": 100
+  },
   "exclusive_group": "review-mode",
   "token_budget": 1000,
   "status": "active"

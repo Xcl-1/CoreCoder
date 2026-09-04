@@ -1,1 +1,139 @@
-{"schema_version":1,"id":"devops.ci-cd-debug","name":"CI/CD Pipeline Debugging","version":"1.0.0","summary":"Diagnose build, test, packaging, cache, permission, and deployment failures inside CI/CD pipelines.","category":["devops","ci-cd","debugging"],"tags":["CI/CD","pipeline failure","GitHub Actions","build failure","流水线失败","持续集成"],"aliases":["debug CI","排查流水线"],"intents":["fix the CI pipeline","排查 CI 构建失败"],"applies_when":["Failure occurs in an automated build, test, release, or deployment pipeline."],"not_when":["local test failure","production deployment incident","本地测试失败","生产部署故障"],"examples":{"positive":["The GitHub Actions build fails only in CI; diagnose it","GitHub Actions 只在 CI 中构建失败，请排查"],"negative":["pytest fails locally","生产环境发布后服务启动失败"]},"tools":{"required":["read_file","grep","bash"],"recommended":["glob","edit_file"],"forbidden":[]},"exclusive_group":"operations-debug","token_budget":1100,"status":"active"}
+{
+  "schema_version": 2,
+  "id": "devops.ci-cd-debug",
+  "name": "CI/CD Pipeline Debugging",
+  "version": "1.0.0",
+  "summary": "Diagnose build, test, packaging, cache, permission, and deployment failures inside CI/CD pipelines.",
+  "layer": "workflow",
+  "category": [
+    "devops",
+    "ci-cd",
+    "debugging"
+  ],
+  "tags": [
+    "CI/CD",
+    "pipeline failure",
+    "GitHub Actions",
+    "build failure",
+    "流水线失败",
+    "持续集成"
+  ],
+  "aliases": [
+    "debug CI",
+    "排查流水线"
+  ],
+  "intents": [
+    "fix the CI pipeline",
+    "排查 CI 构建失败"
+  ],
+  "signature": {
+    "domains": [
+      "devops",
+      "ci-cd",
+      "debugging"
+    ],
+    "actions": [
+      "diagnose",
+      "diagnosing",
+      "debug",
+      "debugging",
+      "排查",
+      "定位",
+      "诊断",
+      "fix",
+      "fixes",
+      "fixing",
+      "fixed",
+      "修复",
+      "修正"
+    ],
+    "objects": [
+      "pipeline",
+      "build",
+      "workflow",
+      "runner",
+      "cache",
+      "流水线",
+      "构建",
+      "工作流"
+    ],
+    "artifacts": [
+      "github actions",
+      "gitlab ci",
+      "ci configuration"
+    ],
+    "outputs": [
+      "pipeline fix",
+      "root cause"
+    ],
+    "constraints": []
+  },
+  "applies_when": [
+    "Failure occurs in an automated build, test, release, or deployment pipeline."
+  ],
+  "not_when": [
+    "local test failure",
+    "production deployment incident",
+    "本地测试失败",
+    "生产部署故障"
+  ],
+  "examples": {
+    "positive": [
+      "The GitHub Actions build fails only in CI; diagnose it",
+      "GitHub Actions 在 CI 中构建失败",
+      "GitHub Actions 只在 CI 中构建失败，请排查"
+    ],
+    "negative": [
+      "pytest fails locally with a traceback",
+      "本地测试失败",
+      "pytest fails locally",
+      "生产环境发布后服务启动失败"
+    ],
+    "hard_negative": [
+      "The service is unhealthy after deployment; find the cause",
+      "This test fails intermittently in CI; find the source of flakiness"
+    ],
+    "contrastive": [
+      {
+        "query": "pytest is failing with a traceback after my change",
+        "expected_skill": "python.test-debug",
+        "reason": "Local Python test failures route to the test-debug workflow."
+      },
+      {
+        "query": "The service is unhealthy after deployment; find the cause",
+        "expected_skill": "devops.deployment-troubleshooting",
+        "reason": "Runtime deployment failures are deployment troubleshooting."
+      },
+      {
+        "query": "This test fails intermittently in CI; find the source of flakiness",
+        "expected_skill": "testing.flaky-test-debug",
+        "reason": "Nondeterministic failures are flaky-test debugging."
+      }
+    ]
+  },
+  "tools": {
+    "required": [
+      "read_file",
+      "grep",
+      "bash"
+    ],
+    "recommended": [
+      "glob",
+      "edit_file"
+    ],
+    "forbidden": []
+  },
+  "relations": {
+    "dependencies": [],
+    "composes_with": [],
+    "supersedes": []
+  },
+  "routing": {
+    "allow_implicit": true,
+    "risk": "medium",
+    "rollout_percent": 100
+  },
+  "exclusive_group": "operations-debug",
+  "token_budget": 1100,
+  "status": "active"
+}

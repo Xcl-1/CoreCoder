@@ -10,6 +10,7 @@ from .models import Skill, SkillManifest, SkillScope
 
 MAX_MANIFEST_BYTES = 64 * 1024
 MAX_INSTRUCTIONS_BYTES = 256 * 1024
+MAX_MODE_RESOURCE_BYTES = 128 * 1024
 
 
 class SkillLoadError(ValueError):
@@ -55,3 +56,51 @@ def load_instructions(skill: Skill) -> str:
         raise SkillLoadError(f"SKILL.md is too large: {skill.path}")
     skill.instructions = text.strip()
     return skill.instructions
+
+
+def load_mode_resources(skill: Skill, query: str) -> str:
+    """Load only references and resource paths for modes matching this request."""
+    from .catalog import expanded_tokens, phrase_matches
+
+    query_tokens = expanded_tokens(query)
+    normalized = query.lower()
+    parts: list[str] = []
+    used = 0
+    root = skill.path.resolve()
+    for mode in skill.manifest.resource_modes:
+        if not any(phrase_matches(rule, query_tokens, normalized) for rule in mode.when):
+            continue
+        mode_parts = [f"\n### Active skill mode: {mode.id}"]
+        for relative in mode.references:
+            path = _safe_resource_path(root, relative)
+            try:
+                content = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                raise SkillLoadError(f"could not read mode reference {relative!r}: {exc}") from exc
+            size = len(content.encode("utf-8"))
+            if used + size > MAX_MODE_RESOURCE_BYTES:
+                raise SkillLoadError("matched mode references exceed the resource byte limit")
+            used += size
+            mode_parts.append(f"\n#### Reference: {relative}\n{content.strip()}")
+        if mode.scripts:
+            scripts = [_safe_resource_path(root, value) for value in mode.scripts]
+            mode_parts.append("\nScripts available for this mode:\n" + "\n".join(
+                f"- {path}" for path in scripts
+            ))
+        if mode.assets:
+            assets = [_safe_resource_path(root, value) for value in mode.assets]
+            mode_parts.append("\nAssets available for this mode:\n" + "\n".join(
+                f"- {path}" for path in assets
+            ))
+        parts.extend(mode_parts)
+    return "\n".join(parts).strip()
+
+
+def _safe_resource_path(root: Path, relative: str) -> Path:
+    value = Path(relative)
+    if value.is_absolute():
+        raise SkillLoadError(f"skill resource must be relative: {relative!r}")
+    path = (root / value).resolve()
+    if not path.is_relative_to(root) or not path.is_file():
+        raise SkillLoadError(f"skill resource is missing or escapes its package: {relative!r}")
+    return path
