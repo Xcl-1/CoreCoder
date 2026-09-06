@@ -346,6 +346,12 @@ def _repl(agent: Agent, config: Config, show_history: bool = False):
         if user_input == "/skill audit":
             _audit_skill_catalog(agent)
             continue
+        if user_input == "/skill metrics":
+            _show_skill_metrics(agent)
+            continue
+        if user_input.startswith("/skill evolve "):
+            _evolve_memory_skill(agent, user_input[len("/skill evolve "):].strip())
+            continue
         if user_input == "/permissions":
             _show_permissions(agent)
             continue
@@ -589,6 +595,8 @@ def _show_help():
         "  /skill reload  Rescan skill directories\n"
         "  /skill explain Explain the previous route\n"
         "  /skill audit   Show catalog overlap and relation issues\n"
+        "  /skill metrics Show persisted routing outcome metrics\n"
+        "  /skill evolve <memory-id> Create a reviewed-lifecycle candidate\n"
         "  /permissions   List security rules\n"
         "  /permit <t> <p> Add an allow rule\n"
         "  /deny <t> <p> Add a deny rule\n"
@@ -608,7 +616,7 @@ def _create_memory_engine(config: Config, llm):
         return None
     return MemoryEngine(
         llm=llm,
-        root=config.memory_dir,
+        root=config.memory_data_dir,
         project_path=os.getcwd(),
         top_k=config.memory_top_k,
     )
@@ -619,7 +627,7 @@ def _create_memory_worker(config: Config, llm) -> MemoryWorker:
     worker_llm = llm.fork()
     engine = MemoryEngine(
         llm=worker_llm,
-        root=config.memory_dir,
+        root=config.memory_data_dir,
         project_path=os.getcwd(),
         top_k=config.memory_top_k,
     )
@@ -650,7 +658,7 @@ def _create_skill_manager(config: Config) -> SkillManager | None:
         return None
     manager = SkillManager.create(
         project_path=os.getcwd(),
-        user_dir=config.skills_dir,
+        user_dir=config.skills_data_dir,
         top_k=config.skill_top_k,
         max_active=config.skill_max_active,
         max_prompt_chars=config.skill_prompt_chars,
@@ -658,6 +666,7 @@ def _create_skill_manager(config: Config) -> SkillManager | None:
         auto_confidence=config.skill_auto_confidence,
         clarify_confidence=config.skill_clarify_confidence,
         ambiguity_margin=config.skill_ambiguity_margin,
+        telemetry_path=config.skills_data_dir / ".telemetry.json",
     )
     for error in manager.registry.errors:
         logger.warning("Skill discovery: %s", error)
@@ -683,7 +692,7 @@ def _save_current_session(agent: Agent, config: Config) -> str | None:
 def _show_memory(agent: Agent, config: Config):
     if agent.memory is None:
         console.print("Memory: [yellow]disabled[/yellow]")
-        console.print(f"Directory: [dim]{config.memory_dir}[/dim]")
+        console.print(f"Directory: [dim]{config.memory_data_dir}[/dim]")
         return
     console.print("Memory: [green]enabled[/green]")
     console.print(f"Directory: [dim]{agent.memory.store.root}[/dim]")
@@ -700,6 +709,14 @@ def _show_memory(agent: Agent, config: Config):
         line = Text("  pending ")
         line.append(str(item["session_id"]), style="yellow")
         line.append(f" attempts={item['attempts']} last_error={item['last_error']}")
+        console.print(line)
+    outcomes = agent.memory.learning_outcomes(limit=5)
+    console.print(f"Learning outcomes: [bold]{len(outcomes)}[/bold] recent")
+    for item in outcomes:
+        line = Text("  outcome ")
+        style = "green" if item["status"] == "saved" else "yellow"
+        line.append(str(item["session_id"]), style=style)
+        line.append(f" status={item['status']} reason={item['reason']}")
         console.print(line)
     for memory in agent.memory.store.list()[:10]:
         line = Text("  ")
@@ -721,9 +738,12 @@ def _show_memory_entry(agent: Agent, memory_id: str) -> None:
         f"Type: {memory.type}  Scope: {memory.scope}  Status: {memory.status}  Version: {memory.version}\n"
         f"Uses: {memory.use_count}  Success/Failure: {memory.success_count}/{memory.failure_count}\n"
         f"Independent validations: {memory.validation_count}  Last validated: {memory.validated_at or '-'}\n"
+        f"Completion-checked sessions: {len(set(memory.verified_sessions))}\n"
         f"Keywords: {', '.join(memory.keywords) or '-'}\n"
         f"Sources: {', '.join(memory.source_sessions) or '-'}"
     )
+    if memory.type == "procedure" and len(set(memory.verified_sessions)) < 2:
+        metadata += "\nRevalidation required: procedure retrieval and Skill evolution need two completion-checked sessions."
     console.print(Panel(Markdown(f"# {memory.title}\n\n{memory.content}\n\n---\n\n{metadata}"), border_style="blue"))
 
 
@@ -792,7 +812,7 @@ def _reflect_pending(agent: Agent) -> None:
 def _show_skills(agent: Agent, config: Config) -> None:
     if agent.skills is None:
         console.print("Skills: [yellow]disabled[/yellow]")
-        console.print(f"Directory: [dim]{config.skills_dir}[/dim]")
+        console.print(f"Directory: [dim]{config.skills_data_dir}[/dim]")
         return
     from rich.table import Table
     skills = agent.skills.registry.all(include_inactive=True)
@@ -846,6 +866,8 @@ def _show_skill(agent: Agent, skill_id: str) -> None:
         f"- Tags: {', '.join(manifest.tags) or '-'}\n"
         f"- Required tools: {', '.join(manifest.tools.required) or '-'}\n"
         f"- Forbidden tools: {', '.join(manifest.tools.forbidden) or '-'}\n"
+        f"- Source memories: {', '.join(manifest.evolution.source_memory_ids) or '-'}\n"
+        f"- Review required: `{manifest.evolution.review_required}`\n"
         f"- Path: `{skill.path}`"
     )
     console.print(Panel(Markdown(details), border_style="blue"))
@@ -927,6 +949,58 @@ def _audit_skill_catalog(agent: Agent) -> None:
     console.print(f"[bold]Skill catalog issues ({len(issues)}):[/bold]")
     for issue in issues:
         console.print(f"  [yellow]{issue.code}[/yellow] {issue.message}")
+
+
+def _show_skill_metrics(agent: Agent) -> None:
+    if agent.skills is None or agent.skills.telemetry is None:
+        console.print("[yellow]Skill telemetry is disabled.[/yellow]")
+        return
+    from rich.table import Table
+
+    stats = agent.skills.telemetry.stats()
+    if not stats:
+        console.print("[dim]No persisted skill outcomes yet.[/dim]")
+        return
+    penalties = agent.skills.router.failure_penalties
+    table = Table(title="Skill routing outcomes", border_style="blue")
+    table.add_column("Skill", style="cyan")
+    table.add_column("Routes", justify="right")
+    table.add_column("Clarify", justify="right")
+    table.add_column("Success", justify="right")
+    table.add_column("Partial", justify="right")
+    table.add_column("Failure", justify="right")
+    table.add_column("Penalty", justify="right")
+    for skill_id, row in sorted(stats.items()):
+        table.add_row(
+            skill_id,
+            str(row.get("routes", 0)),
+            str(row.get("clarifications", 0)),
+            str(row.get("success_count", 0)),
+            str(row.get("partial_count", 0)),
+            str(row.get("failure_count", 0)),
+            f"{penalties.get(skill_id, 0.0):.4f}",
+        )
+    console.print(table)
+
+
+def _evolve_memory_skill(agent: Agent, memory_id: str) -> None:
+    """Explicitly create a non-routable Skill candidate from validated memory."""
+    if agent.memory is None or agent.skills is None:
+        console.print("[yellow]Memory and Skills must both be enabled.[/yellow]")
+        return
+    memory = agent.memory.store.get(memory_id)
+    if memory is None:
+        console.print(f"[yellow]Memory not found: {memory_id}[/yellow]")
+        return
+    try:
+        candidate = agent.skills.propose_from_memory(memory)
+    except (OSError, ValueError) as exc:
+        console.print(f"[yellow]Could not create Skill candidate: {exc}[/yellow]")
+        return
+    console.print(
+        f"[green]Created Skill candidate:[/green] {candidate.manifest.id}. "
+        "Review skill.json and SKILL.md, then promote it to shadow explicitly."
+    )
 
 
 # ---- security helpers --------------------------------------------------

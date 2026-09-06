@@ -130,6 +130,8 @@ def test_incremental_tool_turn_keeps_verified_procedure_learning(tmp_path):
     reflection = {
         "task_summary": "Fix and verify the failure",
         "outcome": "success",
+        "deliverable_complete": True,
+        "constraints_satisfied": True,
         "summary": "The suite passed.",
         "failures": [],
         "root_causes": [],

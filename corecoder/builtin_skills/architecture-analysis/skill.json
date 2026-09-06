@@ -8,6 +8,8 @@
   "category": [
     "repository",
     "architecture",
+    "架构",
+    "执行入口",
     "analysis"
   ],
   "tags": [
@@ -63,6 +65,9 @@
       "execution flow",
       "代码库",
       "项目架构",
+      "架构",
+      "执行入口",
+      "主要模块",
       "调用链"
     ],
     "artifacts": [

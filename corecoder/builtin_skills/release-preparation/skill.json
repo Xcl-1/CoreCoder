@@ -14,15 +14,21 @@
     "release",
     "version bump",
     "release checklist",
+    "release metadata verification",
     "发布准备",
+    "发布元数据核验",
     "版本发布"
   ],
   "aliases": [
     "prepare release",
+    "verify release metadata",
+    "核验发布元数据",
     "准备发布"
   ],
   "intents": [
     "prepare the next release",
+    "verify release metadata without publishing",
+    "只读核验发布元数据",
     "准备新版本发布"
   ],
   "signature": {
@@ -42,7 +48,10 @@
       "analyzes",
       "analyzing",
       "analysis",
-      "分析"
+      "分析",
+      "verify",
+      "verification",
+      "核验"
     ],
     "objects": [
       "release",
@@ -50,6 +59,8 @@
       "version bump",
       "checklist",
       "artifact",
+      "release metadata",
+      "发布元数据",
       "发布准备",
       "版本发布"
     ],
@@ -66,7 +77,9 @@
     ]
   },
   "applies_when": [
-    "The user requests repository changes and checks needed before a release."
+    "The user requests repository changes and checks needed before a release.",
+    "The user requests read-only verification of release metadata without publishing.",
+    "用户要求只读核验发布元数据且不执行发布。"
   ],
   "not_when": [
     "publish package now",
@@ -77,6 +90,8 @@
   "examples": {
     "positive": [
       "Prepare version 2.1.0 for release",
+      "Perform a read-only release metadata verification",
+      "只读核验 pyproject.toml 中的发布元数据",
       "准备新版本发布并核对发布清单",
       "准备发布 2.1.0 版本"
     ],

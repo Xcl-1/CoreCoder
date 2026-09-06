@@ -1,8 +1,16 @@
 """Configuration - env vars and defaults."""
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
+
+_NAMESPACE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$")
+_WINDOWS_RESERVED_NAMES = {
+    "con", "prn", "aux", "nul",
+    *(f"com{number}" for number in range(1, 10)),
+    *(f"lpt{number}" for number in range(1, 10)),
+}
 
 
 def resolve_memory_dir(value: str | Path | None = None) -> Path:
@@ -15,6 +23,45 @@ def resolve_skill_dir(value: str | Path | None = None) -> Path:
     """Resolve the user-level skill directory without creating it."""
     raw = value if value is not None else (os.getenv("CORECODER_SKILLS_DIR") or "~/.corecoder/skills")
     return Path(raw).expanduser().resolve()
+
+
+def validate_namespace(value: str, field: str) -> str:
+    """Validate an externally supplied tenant or user identifier for path use."""
+    normalized = value.strip()
+    if not normalized:
+        return ""
+    canonical = normalized.casefold()
+    if (
+        canonical in {".", ".."}
+        or canonical.rstrip(".") in _WINDOWS_RESERVED_NAMES
+        or normalized.endswith(".")
+        or not _NAMESPACE_RE.fullmatch(normalized)
+    ):
+        raise ValueError(
+            f"{field} must be 1-128 characters using letters, numbers, '.', '_', '@', or '-'"
+        )
+    return canonical
+
+
+def scoped_data_dir(
+    root: str | Path,
+    *,
+    tenant_id: str = "",
+    user_id: str = "",
+) -> Path:
+    """Return a traversal-safe per-tenant/per-user data directory.
+
+    Empty identifiers preserve the historical single-user layout. Deployments
+    can opt into isolation without migrating existing local installations.
+    """
+    path = Path(root).expanduser().resolve()
+    tenant = validate_namespace(tenant_id, "tenant_id")
+    user = validate_namespace(user_id, "user_id")
+    if tenant:
+        path /= Path("tenants") / tenant
+    if user:
+        path /= Path("users") / user
+    return path.resolve()
 
 
 def _load_dotenv():
@@ -58,6 +105,24 @@ class Config:
     skill_auto_confidence: float = 0.82
     skill_clarify_confidence: float = 0.65
     skill_ambiguity_margin: float = 0.12
+    tenant_id: str = ""
+    user_id: str = ""
+
+    @property
+    def memory_data_dir(self) -> Path:
+        return scoped_data_dir(
+            self.memory_dir,
+            tenant_id=self.tenant_id,
+            user_id=self.user_id,
+        )
+
+    @property
+    def skills_data_dir(self) -> Path:
+        return scoped_data_dir(
+            self.skills_dir,
+            tenant_id=self.tenant_id,
+            user_id=self.user_id,
+        )
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -84,6 +149,8 @@ class Config:
         skill_auto_confidence_raw = os.getenv("CORECODER_SKILL_AUTO_CONFIDENCE", "0.82")
         skill_clarify_confidence_raw = os.getenv("CORECODER_SKILL_CLARIFY_CONFIDENCE", "0.65")
         skill_ambiguity_margin_raw = os.getenv("CORECODER_SKILL_AMBIGUITY_MARGIN", "0.12")
+        tenant_id = validate_namespace(os.getenv("CORECODER_TENANT_ID", ""), "CORECODER_TENANT_ID")
+        user_id = validate_namespace(os.getenv("CORECODER_USER_ID", ""), "CORECODER_USER_ID")
 
         # --- validation --------------------------------------------------
         try:
@@ -201,4 +268,6 @@ class Config:
             skill_auto_confidence=skill_auto_confidence,
             skill_clarify_confidence=skill_clarify_confidence,
             skill_ambiguity_margin=skill_ambiguity_margin,
+            tenant_id=tenant_id,
+            user_id=user_id,
         )

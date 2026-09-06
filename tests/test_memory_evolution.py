@@ -88,6 +88,8 @@ def test_reflector_uses_replay_and_validates_evidence(tmp_path):
     payload = {
         "task_summary": "Fix the test failure",
         "outcome": "success",
+        "deliverable_complete": True,
+        "constraints_satisfied": True,
         "summary": "The fix passed the suite.",
         "failures": [],
         "root_causes": ["Compatibility issue"],
@@ -185,6 +187,31 @@ def test_reflection_collapses_duplicate_replay_noise(tmp_path):
     assert "omitted 1 duplicate tool execution(s)" in source
 
 
+def test_reflection_source_preserves_task_and_long_final_answer_tail():
+    terminal_marker = "Release metadata verification complete: evidence present; no files changed."
+    messages = [
+        {
+            "role": "user",
+            "content": "Perform a read-only release metadata verification and deliver a report.",
+        },
+        *(
+            {"role": "tool", "content": f"tool evidence {index}: " + ("x" * 1_800)}
+            for index in range(20)
+        ),
+        {
+            "role": "assistant",
+            "content": "# Complete verification report\n" + ("detail\n" * 1_000) + terminal_marker,
+        },
+    ]
+
+    source = MemoryReflector(object(), max_source_chars=6_000).source_text(messages)
+
+    assert len(source) <= 6_000
+    assert "Perform a read-only release metadata verification" in source
+    assert "# Complete verification report" in source
+    assert terminal_marker in source
+
+
 def test_procedure_requires_verified_success():
     proposal = [{
         "action": "create",
@@ -199,6 +226,8 @@ def test_procedure_requires_verified_success():
     }]
     verified = SessionReflection(
         outcome="success",
+        deliverable_complete=True,
+        constraints_satisfied=True,
         verification=["243 passed"],
         evidence=["243 passed"],
         tool_executions=1,
@@ -283,6 +312,8 @@ def test_preference_acknowledgement_cannot_create_episode():
     ]
     reflection = SessionReflection(
         outcome="success",
+        deliverable_complete=True,
+        constraints_satisfied=True,
         evidence=["Please remember this preference."],
     )
 
@@ -324,6 +355,8 @@ def test_task_request_memory_is_dropped_while_verified_procedure_is_kept():
     ]
     reflection = SessionReflection(
         outcome="success",
+        deliverable_complete=True,
+        constraints_satisfied=True,
         verification=["25 passed"],
         evidence=["25 passed"],
         tool_executions=1,
@@ -350,6 +383,8 @@ def test_engine_learns_procedure_and_updates_retrieval_feedback(tmp_path):
     reflection = {
         "task_summary": "Fix compatibility tests",
         "outcome": "success",
+        "deliverable_complete": True,
+        "constraints_satisfied": True,
         "summary": "All tests passed.",
         "failures": [],
         "root_causes": ["Compatibility issue"],
@@ -413,6 +448,8 @@ def test_verified_success_gets_constrained_procedure_fallback(tmp_path):
     reflection = {
         "task_summary": "Verify the memory tests",
         "outcome": "success",
+        "deliverable_complete": True,
+        "constraints_satisfied": True,
         "summary": "The corrected command passed.",
         "failures": ["blocked by policy"],
         "root_causes": ["The first command was blocked"],
@@ -462,6 +499,8 @@ def test_general_extraction_failure_still_uses_execution_fallback(tmp_path):
     reflection = {
         "task_summary": "Verify compatibility",
         "outcome": "success",
+        "deliverable_complete": True,
+        "constraints_satisfied": True,
         "summary": "The suite passed.",
         "failures": [],
         "root_causes": [],
@@ -510,6 +549,8 @@ def test_candidate_procedure_activates_after_second_independent_validation(tmp_p
     reflection = {
         "task_summary": "Verify compatibility",
         "outcome": "success",
+        "deliverable_complete": True,
+        "constraints_satisfied": True,
         "summary": "The suite passed.",
         "failures": [],
         "root_causes": [],
@@ -553,6 +594,322 @@ def test_candidate_procedure_activates_after_second_independent_validation(tmp_p
     assert second.validation_count == 2
     assert second.source_sessions == ["validation-one", "validation-two"]
     assert engine.search("compatibility pytest")
+
+
+def test_verified_repeat_deterministically_validates_one_matching_candidate(tmp_path):
+    replay = tmp_path / "repeat.jsonl"
+    _write_replay(replay)
+    reflection = {
+        "task_summary": "Fix and verify the test failure",
+        "outcome": "success",
+        "deliverable_complete": True,
+        "constraints_satisfied": True,
+        "summary": "The verification passed.",
+        "failures": [],
+        "root_causes": [],
+        "effective_actions": ["Ran the verification"],
+        "verification": ["243 passed"],
+        "reusable_lessons": ["Require pytest to pass"],
+        "evidence": ["243 passed"],
+    }
+    llm = _FakeLLM([json.dumps(reflection), "[]", "[]"])
+    engine = MemoryEngine(llm, root=tmp_path / "memory", project_path=tmp_path)
+    engine.store.save(_memory(
+        "test-failure-verification",
+        title="Test failure verification procedure",
+        description="Fix test failures and verify the result with pytest",
+        content="Fix the test failure, run pytest, and require a clean pass.",
+        type="procedure",
+        scope="project",
+        keywords=["test failure", "verify", "pytest"],
+        status="candidate",
+        validation_count=1,
+        verified_sessions=["validation-one"],
+        source_sessions=["validation-one"],
+        project_path=str(tmp_path.resolve()),
+    ))
+
+    learned = engine.learn(_messages(), "validation-two", replay)
+
+    assert len(learned) == 1
+    assert learned[0].id == "test-failure-verification"
+    assert learned[0].status == "active"
+    assert learned[0].validation_count == 2
+    assert learned[0].verified_sessions == ["validation-one", "validation-two"]
+
+
+def test_verified_repeat_overrides_competing_model_procedure_proposal(tmp_path):
+    replay = tmp_path / "repeat-competing.jsonl"
+    _write_replay(replay)
+    reflection = {
+        "task_summary": "Fix and verify the test failure",
+        "outcome": "success",
+        "deliverable_complete": True,
+        "constraints_satisfied": True,
+        "summary": "The verification passed.",
+        "failures": [],
+        "root_causes": [],
+        "effective_actions": ["Ran the verification"],
+        "verification": ["243 passed"],
+        "reusable_lessons": ["Require pytest to pass"],
+        "evidence": ["243 passed"],
+    }
+    competing = [{
+        "action": "create",
+        "title": "A newly worded verification process",
+        "description": "A model-generated alternative to the known procedure",
+        "content": "Run a different verification description.",
+        "type": "procedure",
+        "scope": "project",
+        "keywords": ["verification", "pytest"],
+        "confidence": 0.9,
+        "evidence": "243 passed",
+    }]
+    engine = MemoryEngine(
+        _FakeLLM([json.dumps(reflection), json.dumps(competing)]),
+        root=tmp_path / "memory",
+        project_path=tmp_path,
+    )
+    engine.store.save(_memory(
+        "test-failure-verification",
+        title="Test failure verification procedure",
+        description="Fix test failures and verify the result with pytest",
+        content="Fix the test failure, run pytest, and require a clean pass.",
+        type="procedure",
+        scope="project",
+        keywords=["test failure", "verify", "pytest"],
+        status="candidate",
+        validation_count=1,
+        verified_sessions=["validation-one"],
+        source_sessions=["validation-one"],
+        project_path=str(tmp_path.resolve()),
+    ))
+
+    learned = engine.learn(_messages(), "validation-two", replay)
+
+    assert [memory.id for memory in learned] == ["test-failure-verification"]
+    assert learned[0].status == "active"
+    assert learned[0].verified_sessions == ["validation-one", "validation-two"]
+    assert engine.store.get("a-newly-worded-verification-process") is None
+
+
+def test_completed_repeat_validates_candidate_when_reflection_omits_procedure_fields(tmp_path):
+    replay = tmp_path / "repeat-runtime-verified.jsonl"
+    _write_replay(replay)
+    reflection = {
+        "task_summary": "Repeat the pytest verification procedure",
+        "outcome": "unknown",
+        "deliverable_complete": False,
+        "constraints_satisfied": False,
+        "verification": [],
+        "evidence": [],
+    }
+    engine = MemoryEngine(
+        _FakeLLM([json.dumps(reflection), "[]"]),
+        root=tmp_path / "memory",
+        project_path=tmp_path,
+    )
+    engine.store.save(_memory(
+        "test-failure-verification",
+        title="Test failure verification procedure",
+        description="Fix test failures and verify the result with pytest",
+        content="Fix the test failure, run pytest, and require a clean pass.",
+        type="procedure",
+        scope="project",
+        keywords=["test failure", "verify", "pytest"],
+        evidence=["Verification marker: 243 passed"],
+        status="candidate",
+        validation_count=1,
+        verified_sessions=["validation-one"],
+        source_sessions=["validation-one"],
+        project_path=str(tmp_path.resolve()),
+    ))
+    messages = [
+        {"role": "user", "content": "Fix the test failure and verify it with pytest."},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "call-1",
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "arguments": json.dumps({"file_path": "pyproject.toml"}),
+                },
+            }],
+        },
+        {"role": "tool", "tool_call_id": "call-1", "content": "243 passed"},
+        {
+            "role": "assistant",
+            "content": "Verification marker: 243 passed",
+            "_execution": {"status": "completed", "policy_violations": 0},
+        },
+    ]
+
+    learned = engine.learn(messages, "validation-two", replay)
+
+    assert [memory.id for memory in learned] == ["test-failure-verification"]
+    assert learned[0].status == "active"
+    assert learned[0].validation_count == 2
+    assert learned[0].verified_sessions == ["validation-one", "validation-two"]
+    assert engine.last_learning_status == "saved"
+
+
+def test_explicit_reusable_task_creates_candidate_from_runtime_acceptance_marker(tmp_path):
+    replay = tmp_path / "first-runtime-verified.jsonl"
+    _write_replay(replay)
+    marker = "Verification marker: 243 passed"
+    reflection = {
+        "task_summary": "Run a reusable pytest verification",
+        "outcome": "unknown",
+        "deliverable_complete": False,
+        "constraints_satisfied": False,
+        "verification": [],
+        "evidence": [],
+    }
+    proposal = [{
+        "action": "create",
+        "title": "Reusable pytest verification",
+        "description": "Inspect project metadata and report the verification result",
+        "content": "Read project metadata, verify pytest configuration, and report exact evidence.",
+        "type": "procedure",
+        "scope": "project",
+        "keywords": ["pytest", "verification", "metadata"],
+        "confidence": 0.9,
+        "evidence": marker,
+    }]
+    engine = MemoryEngine(
+        _FakeLLM([json.dumps(reflection), "[]", json.dumps(proposal)]),
+        root=tmp_path / "memory",
+        project_path=tmp_path,
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                "Run a reusable pytest verification. "
+                f"Finally output: {marker}"
+            ),
+        },
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "call-1",
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "arguments": json.dumps({"file_path": "pyproject.toml"}),
+                },
+            }],
+        },
+        {"role": "tool", "tool_call_id": "call-1", "content": "pytest configuration found"},
+        {
+            "role": "assistant",
+            "content": f"pytest configuration found.\n\n{marker}",
+            "_execution": {"status": "completed", "policy_violations": 0},
+        },
+    ]
+
+    learned = engine.learn(messages, "validation-one", replay)
+
+    assert len(learned) == 1
+    assert learned[0].type == "procedure"
+    assert learned[0].status == "candidate"
+    assert learned[0].validation_count == 1
+    assert learned[0].verified_sessions == ["validation-one"]
+    assert learned[0].evidence == [marker]
+
+
+def test_reusable_task_marker_without_tool_evidence_does_not_create_procedure(tmp_path):
+    replay = tmp_path / "marker-only.jsonl"
+    _write_replay(replay)
+    reflection = {
+        "task_summary": "Run a reusable verification",
+        "outcome": "unknown",
+        "deliverable_complete": False,
+        "constraints_satisfied": False,
+        "verification": [],
+        "evidence": [],
+    }
+    engine = MemoryEngine(
+        _FakeLLM([json.dumps(reflection), "[]"]),
+        root=tmp_path / "memory",
+        project_path=tmp_path,
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": "Run a reusable verification. Finally output: Verification complete.",
+        },
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "call-1",
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "arguments": json.dumps({"file_path": "pyproject.toml"}),
+                },
+            }],
+        },
+        {"role": "tool", "tool_call_id": "call-1", "content": "requires-python = >=3.10"},
+        {
+            "role": "assistant",
+            "content": "Verification complete.",
+            "_execution": {"status": "completed", "policy_violations": 0},
+        },
+    ]
+
+    assert engine.learn(messages, "marker-only", replay) == []
+    assert engine.last_learning_status == "no_memory"
+
+
+def test_policy_rejected_learning_is_durably_auditable(tmp_path):
+    replay = tmp_path / "policy-rejected.jsonl"
+    _write_replay(replay)
+    messages = _messages()
+    messages[-1]["_execution"] = {"status": "partial", "policy_violations": 1}
+    reflection = {
+        "task_summary": "Verify the project",
+        "outcome": "success",
+        "deliverable_complete": True,
+        "constraints_satisfied": True,
+        "verification": ["verification complete"],
+        "evidence": ["verification complete"],
+    }
+    engine = MemoryEngine(
+        _FakeLLM([json.dumps(reflection), "[]"]),
+        root=tmp_path / "memory",
+        project_path=tmp_path,
+    )
+
+    assert engine.learn(messages, "policy-rejected", replay) == []
+
+    assert engine.last_learning_status == "rejected_policy"
+    outcome = engine.learning_outcomes()[0]
+    assert outcome["session_id"] == "policy-rejected"
+    assert outcome["status"] == "rejected_policy"
+    assert outcome["reason"] == "execution did not complete within policy"
+
+
+def test_failed_execution_reflection_keeps_pending_checkpoint_for_retry(tmp_path):
+    replay = tmp_path / "reflection-failure.jsonl"
+    _write_replay(replay)
+    engine = MemoryEngine(
+        _FakeLLM(["not json", "still not json"]),
+        root=tmp_path / "memory",
+        project_path=tmp_path,
+    )
+    engine.checkpoint(_messages(), "reflection-failure", replay)
+
+    assert engine.recover_session("reflection-failure") is False
+
+    assert engine.pending_count() == 1
+    status = engine.pending_status()[0]
+    assert status["attempts"] == 1
+    assert status["last_error"] == "execution reflection did not complete"
 
 
 def test_candidate_can_be_approved_explicitly(tmp_path):
@@ -756,6 +1113,8 @@ def test_pending_retry_prioritizes_structured_fallback(tmp_path):
     reflection = {
         "task_summary": "Verify compatibility",
         "outcome": "success",
+        "deliverable_complete": True,
+        "constraints_satisfied": True,
         "summary": "The suite passed.",
         "failures": [],
         "root_causes": [],

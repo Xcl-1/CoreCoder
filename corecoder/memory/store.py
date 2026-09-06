@@ -44,18 +44,36 @@ def normalize_memory_id(value: str) -> str:
 class MemoryStore:
     def __init__(self, root: Path | str | None = None):
         self.root = resolve_memory_dir(root)
+        self._cache_signature: tuple[tuple[str, int, int], ...] | None = None
+        self._cache: list[Memory] = []
 
     def list(self) -> list[Memory]:
         if not self.root.exists():
+            self._cache_signature = None
+            self._cache = []
             return []
-        memories: list[Memory] = []
+        paths = []
+        signature_items = []
         for path in self.root.glob("*.md"):
             if path.name == "MEMORY.md":
                 continue
+            try:
+                stat = path.stat()
+            except FileNotFoundError:
+                continue
+            paths.append(path)
+            signature_items.append((path.name, stat.st_mtime_ns, stat.st_size))
+        signature = tuple(sorted(signature_items))
+        if signature == self._cache_signature:
+            return list(self._cache)
+        memories: list[Memory] = []
+        for path in paths:
             memory = self._read(path)
             if memory is not None:
                 memories.append(memory)
-        return sorted(memories, key=lambda item: item.updated_at, reverse=True)
+        self._cache = sorted(memories, key=lambda item: item.updated_at, reverse=True)
+        self._cache_signature = signature
+        return list(self._cache)
 
     def get(self, memory_id: str) -> Memory | None:
         return self._read(self._path(memory_id))
@@ -75,6 +93,7 @@ class MemoryStore:
         temporary = path.with_suffix(".tmp")
         temporary.write_text(text, encoding="utf-8")
         temporary.replace(path)
+        self._cache_signature = None
         return stored
 
     def delete(self, memory_id: str) -> bool:
@@ -82,6 +101,7 @@ class MemoryStore:
         if not path.exists():
             return False
         path.unlink()
+        self._cache_signature = None
         return True
 
     @contextmanager

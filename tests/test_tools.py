@@ -6,11 +6,16 @@ import sys
 
 import pytest
 
+from corecoder.skills.tool_policy import KNOWN_TOOL_NAMES
 from corecoder.tools import ALL_TOOLS, get_tool
 
 
 def test_tool_count():
     assert len(ALL_TOOLS) == 9
+
+
+def test_skill_tool_policy_registry_tracks_all_tools():
+    assert KNOWN_TOOL_NAMES == {tool.name for tool in ALL_TOOLS}
 
 
 def test_all_tools_have_valid_schema():
@@ -317,6 +322,23 @@ async def test_grep_skips_junk_dirs_inside_root(tmp_path):
     r = await grep.execute(pattern="needle", path=str(tmp_path))
     assert "real.py" in r
     assert "node_modules" not in r
+
+
+@pytest.mark.asyncio
+async def test_recursive_read_tools_skip_replays_and_test_runs(tmp_path):
+    for directory in ("replays", ".test_runs"):
+        hidden = tmp_path / directory
+        hidden.mkdir()
+        (hidden / "trace.py").write_text("operational-canary\n", encoding="utf-8")
+    (tmp_path / "real.py").write_text("public-marker\n", encoding="utf-8")
+
+    grep_result = await get_tool("grep").execute(pattern="marker|canary", path=str(tmp_path))
+    glob_result = await get_tool("glob").execute(pattern="**/*.py", path=str(tmp_path))
+
+    assert "public-marker" in grep_result
+    assert "operational-canary" not in grep_result
+    assert "real.py" in glob_result
+    assert "trace.py" not in glob_result
 
 
 # --- agent tool ---

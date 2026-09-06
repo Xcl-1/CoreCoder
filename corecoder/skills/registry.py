@@ -52,6 +52,16 @@ class SkillRegistry:
                 self.errors.append(f"could not scan {source.path}: {exc}")
                 continue
             for manifest_path in manifests:
+                relative_parts = manifest_path.relative_to(source.path).parts
+                if (
+                    source.scope == "user"
+                    and relative_parts
+                    and relative_parts[0].casefold() in {"tenants", "users"}
+                ):
+                    # These are deployment namespace boundaries, not nested
+                    # Skill groups. A missing identity must fail closed rather
+                    # than discover another tenant's personal capabilities.
+                    continue
                 skill_root = manifest_path.parent.resolve()
                 if not skill_root.is_relative_to(source_root):
                     self.errors.append(f"skill path escapes source root: {manifest_path}")

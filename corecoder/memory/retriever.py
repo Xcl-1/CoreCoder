@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,6 +30,36 @@ class ScoredMemory:
 
 
 class MemoryRetriever:
+    def __init__(self):
+        self._index_signature: tuple[tuple[str, int, str], ...] | None = None
+        self._postings: dict[str, set[str]] = {}
+        self._tokens: dict[str, set[str]] = {}
+
+    def _ensure_index(self, memories: list[Memory]) -> None:
+        signature = tuple(sorted(
+            (memory.id, memory.version, memory.updated_at)
+            for memory in memories
+        ))
+        if signature == self._index_signature:
+            return
+        postings: dict[str, set[str]] = defaultdict(set)
+        tokens_by_id: dict[str, set[str]] = {}
+        for memory in memories:
+            searchable = " ".join([
+                memory.title,
+                memory.description,
+                memory.content,
+                *memory.keywords,
+                *memory.evidence,
+            ])
+            tokens = tokenize(searchable)
+            tokens_by_id[memory.id] = tokens
+            for token in tokens:
+                postings[token].add(memory.id)
+        self._postings = dict(postings)
+        self._tokens = tokens_by_id
+        self._index_signature = signature
+
     def retrieve(
         self,
         query: str,
@@ -40,13 +71,23 @@ class MemoryRetriever:
         query_tokens = tokenize(query)
         if not query_tokens:
             return []
+        self._ensure_index(memories)
+        candidate_ids: set[str] = set()
+        for token in query_tokens:
+            candidate_ids.update(self._postings.get(token, ()))
+        if not candidate_ids:
+            return []
         current_project = str(Path(project_path).resolve()) if project_path else None
         scored: list[ScoredMemory] = []
         normalized_query = query.lower()
 
         for memory in memories:
+            if memory.id not in candidate_ids:
+                continue
             if memory.status != "active":
                 continue
+            if memory.type == "procedure" and len(set(memory.verified_sessions)) < 2:
+                continue  # Legacy validation counters did not check completion.
             # Execution-derived assets are intentionally project-bound. Keep
             # legacy global files readable, but never inject them at runtime.
             if memory.type in ("procedure", "episode") and memory.scope != "project":
@@ -70,14 +111,7 @@ class MemoryRetriever:
 
             # Evidence preserves the user's original language even when the LLM
             # writes an English title/description, improving cross-language recall.
-            searchable = " ".join([
-                memory.title,
-                memory.description,
-                memory.content,
-                *memory.keywords,
-                *memory.evidence,
-            ])
-            memory_tokens = tokenize(searchable)
+            memory_tokens = self._tokens.get(memory.id, set())
             overlap = len(query_tokens & memory_tokens) / math.sqrt(max(1, len(query_tokens) * len(memory_tokens)))
             keyword_bonus = sum(
                 0.12 for keyword in set(memory.keywords) if len(keyword.strip()) > 1 and keyword.lower() in normalized_query

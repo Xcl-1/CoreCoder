@@ -2,18 +2,30 @@
 
 from __future__ import annotations
 
+import logging
+
+from .evolution import SkillEvolutionEngine
 from .lifecycle import transition_skill
-from .models import RouteResult, SkillCandidate
+from .models import RouteResult, Skill, SkillCandidate
 from .registry import SkillRegistry
 from .router import SkillRouter
+from .telemetry import SkillTelemetryStore
+
+logger = logging.getLogger(__name__)
 
 
 class SkillManager:
-    def __init__(self, registry: SkillRegistry, router: SkillRouter):
+    def __init__(
+        self,
+        registry: SkillRegistry,
+        router: SkillRouter,
+        telemetry: SkillTelemetryStore | None = None,
+    ):
         self.registry = registry
         self.router = router
         self.pinned: set[str] = set()
         self.last_result: RouteResult | None = None
+        self.telemetry = telemetry
 
     @classmethod
     def create(
@@ -28,9 +40,14 @@ class SkillManager:
         clarify_confidence: float = 0.65,
         ambiguity_margin: float = 0.12,
         semantic_scorer=None,
+        semantic_recaller=None,
         failure_penalties: dict[str, float] | None = None,
+        telemetry_path=None,
     ) -> SkillManager:
         registry = SkillRegistry.default(project_path=project_path, user_dir=user_dir).discover()
+        telemetry = SkillTelemetryStore(telemetry_path) if telemetry_path else None
+        learned_penalties = telemetry.failure_penalties() if telemetry else {}
+        learned_penalties.update(failure_penalties or {})
         return cls(
             registry,
             SkillRouter(
@@ -43,8 +60,10 @@ class SkillManager:
                 clarify_confidence=clarify_confidence,
                 ambiguity_margin=ambiguity_margin,
                 semantic_scorer=semantic_scorer,
-                failure_penalties=failure_penalties,
+                semantic_recaller=semantic_recaller,
+                failure_penalties=learned_penalties,
             ),
+            telemetry=telemetry,
         )
 
     def route(self, query: str, available_tools: set[str], context=None) -> RouteResult:
@@ -54,7 +73,22 @@ class SkillManager:
             pinned=self.pinned,
             context=context,
         )
+        if self.telemetry is not None:
+            try:
+                self.telemetry.record_route(self.last_result)
+            except (OSError, TimeoutError, ValueError):
+                logger.warning("Could not persist skill route telemetry", exc_info=True)
         return self.last_result
+
+    def record_outcome(self, skill_ids: list[str] | set[str], outcome: str) -> None:
+        """Persist an execution outcome and immediately refresh route penalties."""
+        if self.telemetry is None:
+            return
+        try:
+            self.telemetry.record_outcome(skill_ids, outcome)
+            self.router.set_failure_penalties(self.telemetry.failure_penalties())
+        except (OSError, TimeoutError, ValueError):
+            logger.warning("Could not persist skill outcome telemetry", exc_info=True)
 
     def search(self, query: str, limit: int = 20) -> list[SkillCandidate]:
         return self.router.search(query, limit=limit)
@@ -86,3 +120,15 @@ class SkillManager:
             raise ValueError(f"skill was not found: {skill_id}")
         transition_skill(skill, status, reason)
         self.reload()
+
+    def propose_from_memory(self, memory) -> Skill:
+        """Create a review-required project Skill candidate from validated memory."""
+        project_source = next(
+            (source for source in self.registry.sources if source.scope == "project"),
+            None,
+        )
+        if project_source is None:
+            raise ValueError("project Skill source is not configured")
+        candidate = SkillEvolutionEngine(project_source.path).propose(memory)
+        self.reload()
+        return self.registry.get(candidate.manifest.id) or candidate

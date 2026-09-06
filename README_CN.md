@@ -187,7 +187,7 @@ README 只给方向，每条的代码细节第七篇接着讲。挑一个动手�
 /memory          查看跨会话记忆和待反思会话
 /memory show <id> / search <查询> / archive <id> / approve <id> / reflect
 /skills          列出内置、用户和项目 Skill
-/skill search <查询> / show <id> / use <id> / unuse <id> / explain / audit
+/skill search <查询> / show <id> / use <id> / unuse <id> / explain / audit / metrics / evolve <memory-id>
 quit / exit      退出（Ctrl+C 取消当前回合）
 ```
 
@@ -198,6 +198,8 @@ quit / exit      退出（Ctrl+C 取消当前回合）
 每个完整回合结束后，CoreCoder 会先快速写入持久化 pending 检查点，再由后台 worker 提取稳定的用户偏好、用户画像、项目约定、历史反馈、经过验证的程序性经验和有价值的任务情景，并保存到 `~/.corecoder/memory`。尚未处理的连续回合会合并，基于 checkpoint token 的确认机制保证旧提取任务不会误删更新的聊天。启动恢复也在后台运行，正常退出不再等待模型请求；未完成的工作会留在 pending，供后续运行继续处理。此后每轮用户输入都会按当前问题和项目范围重新检索活跃记忆，使用次数与成功/失败反馈会参与后续排序；检索也会搜索用户原始 evidence，因此中文请求被总结成英文后仍能用中文召回。`/memory` 会显示 pending 的重试次数和最近提取错误，连续失败三次后进入隔离区。记忆支持证据、版本、候选/活跃/归档/替换状态、自动重建的 `MEMORY.md` 以及跨进程更新锁。
 
 使用 `/memory show <id>` 查看详情、`/memory search <查询>` 搜索、`/memory archive <id>` 归档、`/memory approve <id>` 显式启用、`/memory reflect` 重试待处理会话、`/memory forget <id>` 永久删除。设置 `CORECODER_MEMORY=0` 可关闭，`CORECODER_MEMORY_DIR` 可修改目录。程序性记忆必须有真实成功工具调用和原文验证证据；若常规提取遗漏 procedure 或返回错误格式，独立的受约束提炼仍可保存已验证的执行记忆，pending 恢复会优先运行这一结构化通道。情景记忆必须有真实失败工具调用以及有证据的失败或根因经验，两者都限制为项目作用域。“运行、分析、总结任务”的请求即使提到以后复用，也不会被当作用户画像或项目记忆；经过验证的复用步骤应保存为 procedure。历史上仅由此类任务证据生成的误判文件仍保留用于审计，但不再参与检索。新生成的执行类记忆首先进入不可检索的 candidate 状态，第二个独立会话再次验证后自动晋升 active，也可以用 `/memory approve <id>` 人工启用。反思前会折叠重复 Replay 噪声。修改持久化 `.corecoder/permissions.json` 必须得到用户明确确认，代理不能为了绕过命令拦截而静默改写。系统不会根据记忆自动生成或安装可执行 Skill，Skill 晋升仍需单独审核。
+
+多用户部署可设置 `CORECODER_TENANT_ID` 和 `CORECODER_USER_ID`。启用后，记忆、用户 Skill 和 Skill 效果统计会写入独立的 `tenants/<tenant>/users/<user>` 命名空间；不设置时继续使用原有单用户目录，保持向后兼容。标识符会经过严格验证，不能包含路径分隔符或目录穿越片段。记忆文件读取带有变更感知缓存，检索使用倒排候选集，避免每次请求重复解析和逐条计算全部记忆。
 
 ### Skill
 
@@ -241,6 +243,18 @@ Skill 是构建在原子 Tool 之上的可复用任务指导，分为 `atomic`�
 生命周期支持 `draft → candidate → shadow → canary → active → deprecated`。`shadow` Skill 只参与打分观察，不会被激活；`canary` 使用稳定路由键按 `rollout_percent` 放量；`supersedes` 会把旧能力的隐式匹配重定向到继任者；`SkillManager.transition` 对可编辑 Skill 的发布或回滚执行状态校验并写入审计记录。宿主还可传入附件/载体、必要输入、连接应用、live app、权限、外部写入、风险、意图类型和稳定放量键。`corecoder.skills.evaluate_router` 可计算正例 Precision@1、整体准确率、误激活率、漏召回率、澄清率、用户改选率、任务成功率、置信度差值、P95 路由延迟、高风险确认率、Shadow 对比、候选数量及估算加载 Token。
 
 设置 `CORECODER_SKILLS=0` 可关闭路由；`CORECODER_SKILLS_DIR`、`CORECODER_SKILL_TOP_K`、`CORECODER_SKILL_MAX_ACTIVE` 和 `CORECODER_SKILL_PROMPT_CHARS` 分别控制用户目录和路由预算。`CORECODER_SKILL_MIN_SCORE`（默认 `0.24`）是候选下限；`CORECODER_SKILL_CLARIFY_CONFIDENCE`（默认 `0.65`）、`CORECODER_SKILL_AUTO_CONFIDENCE`（默认 `0.82`）和 `CORECODER_SKILL_AMBIGUITY_MARGIN`（默认 `0.12`）共同控制拒绝、澄清和自动调用。
+
+每次 Skill 路由及其终态结果都会以聚合计数写入用户命名空间下的 `.telemetry.json`，不额外保存提示词或 Tool 输出。积累足够样本后，失败和部分成功会生成有上限的历史惩罚并立即参与后续精排；少量样本不会触发调权。使用 `/skill metrics` 查看路由次数、成功/部分成功/失败以及当前惩罚值。
+
+大规模部署可通过 `semantic_recaller(query, limit)` 接入向量数据库或 ANN 服务，让外部索引直接返回 Skill ID 和相似度；兼容的逐 Skill `semantic_scorer` 仍可用于小目录，但批量召回接口不会扫描整个 Catalog。
+
+`/skill evolve <memory-id>` 可以把已经激活且经过至少两个独立会话验证的项目 procedure 记忆生成到项目 `.corecoder/skills`。生成结果固定为 `candidate`，关闭隐式调用、Canary 放量为零并带来源记忆；生成过程绝不会直接启用。维护者审查步骤、Tool、权限、边界、示例和验证标准后，才能显式推进 `shadow → canary → active` 生命周期。
+
+程序记忆验证现在同时要求最终交付物完成、执行边界满足和可核对的验证证据。执行异常、未完成报告、交接摘要、访问凭据文件都不能贡献验证次数。待处理检查点保留压缩前的本轮执行证据。`/memory show` 会显示 `Completion-checked sessions`；旧版 procedure 的计数不能直接用于召回或 Skill 进化，`/memory approve` 也不会补造验证证据，需经过两个按新规则完成的独立会话重新验证。`/skill metrics` 增加澄清次数。
+
+`read_file` 和 `grep` 在读取前拦截真实 `.env`、凭据目录和私钥文件；递归 grep 自动跳过这些文件。`.env.example`、`.env.sample` 和 `.env.template` 仍可读取。这是内容读取工具的边界，不是通用文件系统沙箱；脱敏替换标记不能作为原文件含有占位符的证据。
+
+DeepSeek 请求保留服务端返回的思考字段，并为合成的助手消息补齐空字段。上下文压缩保留当前请求；空白、截断或仅含交接摘要的回答会获得一次有界的最终输出重试，失败仍记为未完成。离线回归执行 `python -m pytest -q`；真实接口测试需显式设置 `CORECODER_LIVE_TESTS=1` 后执行 `python -m pytest -q tests/test_provider_live.py`，使用已配置的 DeepSeek 接口，仅发送虚构数据。
 
 ## 相关项目
 

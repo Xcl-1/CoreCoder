@@ -49,6 +49,53 @@ def test_store_roundtrip_and_index(tmp_path):
     assert "[Prefer pytest fixtures](prefer-pytest.md)" in index
 
 
+def test_store_caches_unchanged_markdown_and_detects_external_updates(tmp_path, monkeypatch):
+    first_store = MemoryStore(tmp_path)
+    first_store.save(_memory())
+    calls = 0
+    original = first_store._read
+
+    def counted(path):
+        nonlocal calls
+        calls += 1
+        return original(path)
+
+    monkeypatch.setattr(first_store, "_read", counted)
+    assert len(first_store.list()) == 1
+    assert len(first_store.list()) == 1
+    assert calls == 1
+
+    MemoryStore(tmp_path).save(_memory("second-memory", title="Second memory"))
+    assert len(first_store.list()) == 2
+    assert calls == 3
+
+
+def test_retriever_uses_inverted_candidates_and_refreshes_changed_memory():
+    retriever = MemoryRetriever()
+    first = _memory()
+    unrelated = _memory(
+        "unrelated",
+        title="Rust formatting",
+        description="Format Rust source files",
+        content="Use rustfmt.",
+        keywords=["rustfmt"],
+    )
+
+    assert [item.memory.id for item in retriever.retrieve("pytest", [first, unrelated])] == ["prefer-pytest"]
+    assert "rustfmt" in retriever._postings
+
+    changed = first.model_copy(update={
+        "title": "Prefer unittest",
+        "description": "Use unittest for tests",
+        "content": "Use unittest TestCase.",
+        "keywords": ["unittest"],
+        "evidence": [],
+        "version": 2,
+    })
+    assert retriever.retrieve("pytest", [changed, unrelated]) == []
+    assert [item.memory.id for item in retriever.retrieve("unittest", [changed, unrelated])] == ["prefer-pytest"]
+
+
 def test_store_skips_corrupt_markdown(tmp_path):
     (tmp_path / "broken.md").write_text("not front matter", encoding="utf-8")
     assert MemoryStore(tmp_path).list() == []

@@ -33,6 +33,8 @@ ENV_KEYS = [
     "CORECODER_SKILL_AUTO_CONFIDENCE",
     "CORECODER_SKILL_CLARIFY_CONFIDENCE",
     "CORECODER_SKILL_AMBIGUITY_MARGIN",
+    "CORECODER_TENANT_ID",
+    "CORECODER_USER_ID",
     "OPENAI_BASE_URL",
     "CORECODER_BASE_URL",
 ]
@@ -142,6 +144,34 @@ def test_skill_configuration(monkeypatch, tmp_path):
     assert config.skill_auto_confidence == 0.86
     assert config.skill_clarify_confidence == 0.67
     assert config.skill_ambiguity_margin == 0.08
+
+
+def test_tenant_and_user_namespaces_isolate_mutable_data(monkeypatch, tmp_path):
+    monkeypatch.setenv("CORECODER_MEMORY_DIR", str(tmp_path / "memory"))
+    monkeypatch.setenv("CORECODER_SKILLS_DIR", str(tmp_path / "skills"))
+    monkeypatch.setenv("CORECODER_TENANT_ID", "acme")
+    monkeypatch.setenv("CORECODER_USER_ID", "alice@example.com")
+
+    config = Config.from_env()
+
+    expected_suffix = Path("tenants") / "acme" / "users" / "alice@example.com"
+    assert config.memory_data_dir == tmp_path / "memory" / expected_suffix
+    assert config.skills_data_dir == tmp_path / "skills" / expected_suffix
+
+
+@pytest.mark.parametrize("value", ["../another-user", "NUL", "ambiguous."])
+def test_namespace_rejects_unsafe_path_components(monkeypatch, value):
+    monkeypatch.setenv("CORECODER_USER_ID", value)
+    with pytest.raises(ValueError, match="must be 1-128 characters"):
+        Config.from_env()
+
+
+def test_namespace_is_canonical_across_case_insensitive_filesystems(monkeypatch):
+    monkeypatch.setenv("CORECODER_TENANT_ID", "Acme")
+    monkeypatch.setenv("CORECODER_USER_ID", "ALICE")
+    config = Config.from_env()
+    assert config.tenant_id == "acme"
+    assert config.user_id == "alice"
 
 
 # --- .env file in temporary directory ----------------------------------

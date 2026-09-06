@@ -4,9 +4,13 @@ import re
 from pathlib import Path
 
 from .base import Tool
+from .sensitive import sensitive_path
 
 # skip these dirs to avoid noise
-_SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".tox", "dist", "build"}
+_SKIP_DIRS = {
+    ".git", ".corecoder", ".test_runs", "replays", "node_modules", "__pycache__",
+    ".venv", "venv", ".tox", "dist", "build",
+}
 
 
 class GrepTool(Tool):
@@ -44,6 +48,8 @@ class GrepTool(Tool):
         except re.error as e:
             return f"Invalid regex: {e}"
 
+        if sensitive_path(Path(path)):
+            return "[Security] Blocked: credential files cannot be searched; inspect source or a sanitized example."
         base = Path(path).expanduser().resolve()
         if not base.exists():
             return f"Error: {path} not found"
@@ -55,6 +61,8 @@ class GrepTool(Tool):
 
         matches = []
         for fp in files:
+            if sensitive_path(fp):
+                continue
             try:
                 text = fp.read_text(encoding="utf-8", errors="ignore")
             except OSError:
@@ -77,7 +85,7 @@ class GrepTool(Tool):
             # also catch an ancestor named e.g. "build" and hide the whole tree
             if any(part in _SKIP_DIRS for part in item.relative_to(root).parts):
                 continue
-            if item.is_file():
+            if item.is_file() and not sensitive_path(item):
                 results.append(item)
             if len(results) >= 5000:
                 break

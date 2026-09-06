@@ -6,10 +6,12 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from pathlib import Path
 
+from ..execution import terminal_failure
 from .extractor import MemoryExtractor
 from .index import MemoryIndex
 from .models import ExtractedMemory, Memory, SessionReflection, utc_now
@@ -21,6 +23,12 @@ logger = logging.getLogger(__name__)
 
 MEMORY_POLICY_PROMPT = """# Cross-session memory policy
 Memory files are managed automatically by MemoryEngine from durable per-turn checkpoints. Do not inspect, edit, script, or directly modify the memory directory unless the user explicitly asks for file-level memory administration. When the user states or updates a preference, acknowledge that it has been queued for background consideration; do not claim it is already saved and do not use tools to persist it yourself."""
+
+_REUSABLE_REQUEST_RE = re.compile(r"(?:可复用|可重复|reusable|repeatable)", re.IGNORECASE)
+_TERMINAL_EVIDENCE_PATTERNS = (
+    re.compile(r"(?:最后|最终|结尾|末尾).{0,24}(?:输出|包含|写出)[：:]\s*(.{6,500})\s*$"),
+    re.compile(r"(?:finally\s+output|end\s+with|finish\s+with)[：:]?\s*(.{6,500})\s*$", re.IGNORECASE),
+)
 
 
 class MemoryEngine:
@@ -42,6 +50,7 @@ class MemoryEngine:
         self.max_prompt_chars = max_prompt_chars
         self._retrieved_this_session: set[str] = set()
         self.last_learning_error: str | None = None
+        self.last_learning_status: str | None = None
 
     # ---- retrieval ----------------------------------------------------
 
@@ -115,13 +124,44 @@ class MemoryEngine:
         _processed_turn_ids: set[str] | None = None,
     ) -> list[Memory]:
         self.last_learning_error = None
+        self.last_learning_status = None
         if not self._has_complete_exchange(messages):
+            self._record_learning_outcome(source_session, "rejected_incomplete", "no complete exchange")
             return []
 
         should_reflect = bool(replay_path) or self._has_tool_exchange(messages)
-        reflection = self.reflector.reflect(messages, replay_path) if should_reflect else None
-        evidence_source = self.reflector.source_text(messages, replay_path) if reflection else ""
         existing = self.store.list()
+        query = " ".join(str(m.get("content", "")) for m in messages if m.get("role") == "user")
+        query_tokens = tokenize(query)
+        procedures = self._matching_procedures(existing, query_tokens)
+        requirements = "\n\n".join(
+            f"Procedure {memory.id}:\n{memory.content}"
+            for memory in procedures[:3]
+        )
+        execution_failure = terminal_failure(messages)
+        reflection = self.reflector.reflect(messages, replay_path, requirements=requirements) if should_reflect else None
+        if should_reflect and reflection is None:
+            self.last_learning_error = "execution reflection did not complete"
+            self._record_learning_outcome(source_session, "reflection_failed", self.last_learning_error)
+            if _record_failure:
+                self._record_pending_failure_for_session(source_session, self.last_learning_error)
+            return []
+        if reflection and execution_failure:
+            reflection = reflection.model_copy(update={"deliverable_complete": False})
+        if reflection and not self.extractor.supports_procedure(reflection):
+            requested_repeat = self._completed_requested_procedure(messages)
+            if requested_repeat is not None:
+                repeat_evidence, tool_executions, successful_tools = requested_repeat
+                reflection = reflection.model_copy(update={
+                    "outcome": "success",
+                    "deliverable_complete": True,
+                    "constraints_satisfied": True,
+                    "verification": [repeat_evidence],
+                    "evidence": [repeat_evidence],
+                    "tool_executions": max(reflection.tool_executions, tool_executions),
+                    "successful_tools": max(reflection.successful_tools, successful_tools),
+                })
+        evidence_source = self.reflector.source_text(messages, replay_path) if reflection else ""
         proposals: list[ExtractedMemory] = []
         extraction_completed = False
         fallback_attempted = False
@@ -171,8 +211,55 @@ class MemoryEngine:
             extraction_completed = extraction_completed or self.extractor.last_fallback_succeeded
             self._extend_distinct(proposals, fallback)
 
+        validation_target = None
+        validation_reflection = reflection
+        if reflection:
+            validation_target = self._unambiguous_procedure_match(procedures, query_tokens)
+            repeat_evidence = None
+            if validation_target is not None and not self.extractor.supports_procedure(reflection):
+                repeat = self._completed_procedure_repeat(messages, validation_target)
+                if repeat is not None:
+                    repeat_evidence, tool_executions, successful_tools = repeat
+                    validation_reflection = reflection.model_copy(update={
+                        "outcome": "success",
+                        "deliverable_complete": True,
+                        "constraints_satisfied": True,
+                        "verification": [repeat_evidence],
+                        "evidence": [repeat_evidence],
+                        "tool_executions": max(reflection.tool_executions, tool_executions),
+                        "successful_tools": max(reflection.successful_tools, successful_tools),
+                    })
+            if (
+                validation_target is not None
+                and self.extractor.supports_procedure(validation_reflection)
+            ):
+                # A completed repeat of one known procedure is stronger evidence
+                # than a model-generated create/merge proposal. Force the known
+                # candidate to receive the independent validation.
+                proposals = [
+                    proposal
+                    for proposal in proposals
+                    if not (proposal.type == "procedure" and proposal.action in ("create", "merge"))
+                ]
+                evidence_items = validation_reflection.verification or validation_reflection.evidence
+                evidence = evidence_items[0] if evidence_items else "completion-checked execution"
+                proposals.append(ExtractedMemory(
+                    action="merge",
+                    target_id=validation_target.id,
+                    title=validation_target.title,
+                    description=validation_target.description,
+                    content=validation_target.content,
+                    type="procedure",
+                    scope="project",
+                    keywords=validation_target.keywords,
+                    confidence=validation_target.confidence,
+                    evidence=evidence,
+                    supersedes=validation_target.supersedes,
+                ))
+
         if not extraction_completed:
             self.last_learning_error = self.extractor.last_error or "memory extraction did not complete"
+            self._record_learning_outcome(source_session, "extraction_failed", self.last_learning_error)
             if _record_failure:
                 self._record_pending_failure_for_session(source_session, self.last_learning_error)
             return []
@@ -197,7 +284,12 @@ class MemoryEngine:
                     target = None
                 if target is None:
                     target = self._find_duplicate(proposal, list(by_id.values()))
-                memory = self._merge(target, proposal, source_session, reflection)
+                admission_reflection = (
+                    validation_reflection
+                    if validation_target is not None and proposal.target_id == validation_target.id
+                    else reflection
+                )
+                memory = self._merge(target, proposal, source_session, admission_reflection)
                 if memory is None:
                     continue
                 stored = self.store.save(memory)
@@ -217,7 +309,24 @@ class MemoryEngine:
             if changed:
                 self.index.rebuild(list(by_id.values()))
 
+        if validation_target is not None and not any(
+            memory.id == validation_target.id and source_session in memory.verified_sessions
+            for memory in saved
+        ):
+            self.last_learning_error = f"matching procedure {validation_target.id} was not validated"
+            self._record_learning_outcome(source_session, "validation_failed", self.last_learning_error, saved)
+            if _record_failure:
+                self._record_pending_failure_for_session(source_session, self.last_learning_error)
+            return saved
+
         self._retrieved_this_session.clear()
+        if execution_failure:
+            status = "rejected_policy" if "policy" in execution_failure or "security" in execution_failure else "rejected_execution"
+            self._record_learning_outcome(source_session, status, execution_failure, saved)
+        elif saved:
+            self._record_learning_outcome(source_session, "saved", "memory state updated", saved)
+        else:
+            self._record_learning_outcome(source_session, "no_memory", "no durable memory change")
         self._ack_pending(
             source_session,
             path=_pending_path,
@@ -473,6 +582,58 @@ class MemoryEngine:
                 })
         return statuses
 
+    def learning_outcomes(self, limit: int = 10) -> list[dict[str, str | list[str]]]:
+        """Return recent durable learning decisions for operator inspection."""
+        outcome_dir = self.store.root / ".outcomes"
+        if not outcome_dir.exists():
+            return []
+        outcomes: list[dict[str, str | list[str]]] = []
+        paths = sorted(outcome_dir.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True)
+        for path in paths[: max(0, limit)]:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                outcomes.append({
+                    "session_id": str(payload.get("session_id", path.stem)),
+                    "status": str(payload.get("status", "unknown")),
+                    "reason": str(payload.get("reason", ""))[:300],
+                    "recorded_at": str(payload.get("recorded_at", "-")),
+                    "saved_ids": [str(value) for value in payload.get("saved_ids", [])],
+                })
+            except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                outcomes.append({
+                    "session_id": path.stem,
+                    "status": "invalid",
+                    "reason": "invalid learning outcome record",
+                    "recorded_at": "-",
+                    "saved_ids": [],
+                })
+        return outcomes
+
+    def _record_learning_outcome(
+        self,
+        source_session: str,
+        status: str,
+        reason: str,
+        saved: list[Memory] | None = None,
+    ) -> None:
+        self.last_learning_status = status
+        outcome_dir = self.store.root / ".outcomes"
+        path = outcome_dir / f"{normalize_memory_id(source_session)}.json"
+        payload = {
+            "session_id": source_session,
+            "status": status,
+            "reason": reason[:500],
+            "recorded_at": utc_now(),
+            "saved_ids": [memory.id for memory in (saved or [])],
+        }
+        try:
+            outcome_dir.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_suffix(f".{uuid.uuid4().hex}.tmp")
+            temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            temporary.replace(path)
+        except OSError:
+            logger.warning("Could not persist learning outcome for %s", source_session, exc_info=True)
+
     def _ack_pending(
         self,
         source_session: str,
@@ -556,6 +717,104 @@ class MemoryEngine:
             message.get("role") == "tool" or bool(message.get("tool_calls"))
             for message in messages
         )
+
+    @staticmethod
+    def _completed_procedure_repeat(
+        messages: list[dict],
+        target: Memory,
+    ) -> tuple[str, int, int] | None:
+        """Verify a repeat from runtime facts and an existing acceptance marker."""
+        execution = MemoryEngine._completed_execution(messages)
+        if execution is None:
+            return None
+        tool_executions, successful_tools, final_answer, tool_results = execution
+        if not MemoryEngine._final_uses_tool_evidence(final_answer, tool_results):
+            return None
+        evidence = next(
+            (
+                item.strip()
+                for item in target.evidence
+                if item.strip() and item.strip() in final_answer
+            ),
+            None,
+        )
+        if evidence is None:
+            return None
+        return evidence, tool_executions, successful_tools
+
+    @staticmethod
+    def _completed_requested_procedure(messages: list[dict]) -> tuple[str, int, int] | None:
+        """Use an explicit reusable-task acceptance marker as deterministic evidence."""
+        latest_user = next(
+            (
+                str(message.get("content") or "")
+                for message in reversed(messages)
+                if message.get("role") == "user" and message.get("content")
+            ),
+            "",
+        )
+        if not _REUSABLE_REQUEST_RE.search(latest_user):
+            return None
+        evidence = None
+        for pattern in _TERMINAL_EVIDENCE_PATTERNS:
+            match = pattern.search(latest_user)
+            if match:
+                evidence = match.group(1).strip(" \t\"'“”‘’")
+                break
+        if not evidence:
+            return None
+
+        execution = MemoryEngine._completed_execution(messages)
+        if execution is None:
+            return None
+        tool_executions, successful_tools, final_answer, tool_results = execution
+        if (
+            evidence not in final_answer
+            or not MemoryEngine._final_uses_tool_evidence(final_answer, tool_results)
+        ):
+            return None
+        return evidence, tool_executions, successful_tools
+
+    @staticmethod
+    def _completed_execution(messages: list[dict]) -> tuple[int, int, str, list[str]] | None:
+        """Return successful runtime facts only for a policy-clean completed turn."""
+        if terminal_failure(messages) is not None or not messages:
+            return None
+
+        tool_executions = sum(len(message.get("tool_calls") or []) for message in messages)
+        tool_results = [
+            str(message.get("content") or "")
+            for message in messages
+            if message.get("role") == "tool"
+        ]
+        failed_prefixes = ("error:", "[security]", "[interrupted]", "unknown tool")
+        successful_tools = sum(
+            bool(content.strip()) and not content.lstrip().casefold().startswith(failed_prefixes)
+            for content in tool_results
+        )
+        if (
+            tool_executions < 1
+            or successful_tools < 1
+            or tool_executions != len(tool_results)
+            or successful_tools != len(tool_results)
+        ):
+            return None
+
+        final = messages[-1]
+        if final.get("role") != "assistant" or final.get("tool_calls"):
+            return None
+        final_answer = str(final.get("content") or "")
+        return tool_executions, successful_tools, final_answer, tool_results
+
+    @staticmethod
+    def _final_uses_tool_evidence(final_answer: str, tool_results: list[str]) -> bool:
+        """Require a non-trivial exact tool-result line in the delivered answer."""
+        for result in tool_results:
+            for line in result.splitlines():
+                evidence = re.sub(r"^\s*\d+\s*[\t:|]\s*", "", line).strip().strip("`")
+                if len(evidence) >= 8 and evidence in final_answer:
+                    return True
+        return False
 
     # ---- lifecycle administration ------------------------------------
 
@@ -674,6 +933,50 @@ class MemoryEngine:
             for proposal in proposals
         )
 
+    def _matching_procedures(
+        self,
+        memories: list[Memory],
+        query_tokens: set[str],
+    ) -> list[Memory]:
+        """Return project procedures with enough task-specific overlap to validate."""
+        matches: list[tuple[float, int, Memory]] = []
+        for memory in memories:
+            if (
+                memory.type != "procedure"
+                or memory.status not in {"candidate", "active"}
+                or memory.project_path != str(self.project_path)
+            ):
+                continue
+            memory_tokens = tokenize(
+                f"{memory.title} {memory.description} {' '.join(memory.keywords)}"
+            )
+            overlap = len(query_tokens & memory_tokens)
+            coverage = overlap / len(memory_tokens) if memory_tokens else 0.0
+            if overlap >= 3 and coverage >= 0.25:
+                matches.append((coverage, overlap, memory))
+        matches.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return [memory for _, _, memory in matches]
+
+    def _unambiguous_procedure_match(
+        self,
+        procedures: list[Memory],
+        query_tokens: set[str],
+    ) -> Memory | None:
+        """Select one prior procedure only when metadata matching is well separated."""
+        if not procedures:
+            return None
+        top = procedures[0]
+        if len(procedures) == 1:
+            return top
+
+        def coverage(memory: Memory) -> float:
+            tokens = tokenize(f"{memory.title} {memory.description} {' '.join(memory.keywords)}")
+            return len(query_tokens & tokens) / len(tokens) if tokens else 0.0
+
+        top_score = coverage(top)
+        runner_up = coverage(procedures[1])
+        return top if top_score - runner_up >= 0.10 else None
+
     @staticmethod
     def _extend_distinct(
         proposals: list[ExtractedMemory],
@@ -710,6 +1013,8 @@ class MemoryEngine:
         now = utc_now()
         execution_asset = proposal.type in ("procedure", "episode")
         independently_validated = execution_asset and self._supports_execution_asset(proposal, reflection)
+        if execution_asset and not independently_validated:
+            return None
         if target is None:
             return Memory(
                 id=normalize_memory_id(title),
@@ -724,6 +1029,7 @@ class MemoryEngine:
                 evidence=[evidence] if evidence else [],
                 source_sessions=[source_session],
                 validation_count=1 if independently_validated else 0,
+                verified_sessions=[source_session] if independently_validated else [],
                 validated_at=now if independently_validated else None,
                 status="candidate" if independently_validated else "active",
                 supersedes=proposal.supersedes,
@@ -734,13 +1040,15 @@ class MemoryEngine:
         sources = list(dict.fromkeys([*target.source_sessions, source_session]))
         evidence_items = list(dict.fromkeys([*target.evidence, evidence] if evidence else target.evidence))[-20:]
         validation_count = target.validation_count
+        verified_sessions = list(dict.fromkeys(target.verified_sessions))
         validated_at = target.validated_at
         status = "active"
         if independently_validated:
-            if source_session not in target.source_sessions:
-                validation_count += 1
+            if source_session not in verified_sessions:
+                verified_sessions.append(source_session)
                 validated_at = now
-            status = "active" if target.status == "active" or validation_count >= 2 else "candidate"
+            validation_count = len(verified_sessions)
+            status = "active" if validation_count >= 2 else "candidate"
         return target.model_copy(
             update={
                 "title": title,
@@ -754,6 +1062,7 @@ class MemoryEngine:
                 "evidence": evidence_items,
                 "source_sessions": sources,
                 "validation_count": validation_count,
+                "verified_sessions": verified_sessions,
                 "validated_at": validated_at,
                 "status": status,
                 "supersedes": proposal.supersedes or target.supersedes,

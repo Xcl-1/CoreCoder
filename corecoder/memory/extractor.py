@@ -307,6 +307,8 @@ Conversation:
         return bool(
             reflection
             and reflection.outcome == "success"
+            and reflection.deliverable_complete
+            and reflection.constraints_satisfied
             and reflection.verification
             and reflection.tool_executions >= 1
             and reflection.successful_tools >= 1

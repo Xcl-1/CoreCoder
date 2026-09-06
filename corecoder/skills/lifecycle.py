@@ -44,6 +44,11 @@ def transition_skill(skill: Skill, target: SkillStatus, reason: str) -> None:
         "changed_at": timestamp,
         "reason": reason,
     }
+    evolution = payload.get("evolution")
+    if current == "candidate" and target == "shadow" and isinstance(evolution, dict):
+        evolution["review_required"] = False
+        evolution["reviewed_at"] = timestamp
+        evolution["review_reason"] = reason
     # Validate before replacing the durable manifest.
     updated = skill.manifest.__class__.model_validate(payload)
     temporary = manifest_path.with_suffix(".json.tmp")
@@ -60,6 +65,7 @@ def transition_skill(skill: Skill, target: SkillStatus, reason: str) -> None:
         "to": target,
         "reason": reason,
         "changed_at": timestamp,
+        "source_memory_ids": payload.get("evolution", {}).get("source_memory_ids", []),
     }
     audit_path = skill.path / ".lifecycle.jsonl"
     with audit_path.open("a", encoding="utf-8") as stream:

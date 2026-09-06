@@ -15,4 +15,5 @@ venv/
 .DS_Store
 .pytest_cache/
 .tmp/
+.test_runs/
 replays/

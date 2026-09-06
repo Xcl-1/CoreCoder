@@ -13,10 +13,21 @@ from corecoder.retrieval import tokenize
 
 from .models import RoutingContext, Skill, TaskSignature
 from .registry import SkillRegistry
+from .tool_policy import infer_tool_policy
 
+SemanticRecaller = Callable[[str, int], dict[str, float]]
 SemanticScorer = Callable[[str, Skill], float]
 
 _TOKEN_COMPONENT_RE = re.compile(r"[a-z0-9+#]+", re.IGNORECASE)
+
+
+def positive_intent(query: str) -> str:
+    """Remove prohibition clauses from retrieval, not from execution instructions."""
+    return re.sub(
+        r"(?:\bdo\s+not\b|\bdon't\b|\bnever\b|\bwithout\s+(?=modif|edit|writ|delet|renam|refactor)|禁止|不允许|不要|不得)"
+        r"[^。；;\n.!?！？]*?(?=[。；;\n.!?！？]|\bbut\b|而是|只报告|只分析|只允许|$)",
+        " ", query, flags=re.IGNORECASE,
+    )
 
 
 def expanded_tokens(text: str) -> set[str]:
@@ -88,9 +99,11 @@ class SkillCatalog:
         self,
         registry: SkillRegistry,
         semantic_scorer: SemanticScorer | None = None,
+        semantic_recaller: SemanticRecaller | None = None,
     ):
         self.registry = registry
         self.semantic_scorer = semantic_scorer
+        self.semantic_recaller = semantic_recaller
         self.entries: dict[str, CatalogEntry] = {}
         self.issues: list[CatalogIssue] = []
         self._inverted: dict[str, set[str]] = defaultdict(set)
@@ -189,17 +202,20 @@ class SkillCatalog:
         context: RoutingContext | None = None,
     ) -> TaskSignature:
         """Extract only catalog-known concepts, avoiding a second model call."""
-        query_tokens = expanded_tokens(query)
-        normalized = query.lower()
+        positive_query = positive_intent(query)
+        query_tokens = expanded_tokens(positive_query)
+        normalized = positive_query.lower()
         matched: dict[str, set[str]] = {}
         for dimension, values in self._vocabulary.items():
+            dimension_query = query.lower() if dimension == "constraints" else normalized
+            dimension_tokens = expanded_tokens(query) if dimension == "constraints" else query_tokens
             matched[dimension] = {
                 value
                 for value, value_tokens in values.items()
                 if value_tokens
                 and (
-                    phrase_matches(value, query_tokens, normalized)
-                    or token_similarity(query_tokens, value_tokens) >= 0.9
+                    phrase_matches(value, dimension_tokens, dimension_query)
+                    or token_similarity(dimension_tokens, value_tokens) >= 0.9
                 )
             }
         context = context or RoutingContext()
@@ -213,7 +229,7 @@ class SkillCatalog:
         return TaskSignature(
             **matched,
             risk=context.risk,
-            intent_mode=context.intent_mode or self._intent_mode(query),
+            intent_mode=context.intent_mode or self._intent_mode(positive_query),
         )
 
     def recall(
@@ -230,7 +246,21 @@ class SkillCatalog:
             candidate_ids.update(self._inverted.get(token, ()))
 
         semantic_scores: dict[str, float] = {}
-        if self.semantic_scorer is not None:
+        if self.semantic_recaller is not None:
+            try:
+                recalled = self.semantic_recaller(query, limit)
+            except (TypeError, ValueError, RuntimeError):
+                recalled = {}
+            for skill_id, raw_score in recalled.items():
+                if skill_id not in self.entries:
+                    continue
+                try:
+                    score = float(raw_score)
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(score) and score > 0:
+                    semantic_scores[skill_id] = max(0.0, min(1.0, score))
+        elif self.semantic_scorer is not None:
             for entry in self.entries.values():
                 try:
                     score = float(self.semantic_scorer(query, entry.skill))
@@ -241,12 +271,12 @@ class SkillCatalog:
                 score = max(0.0, min(1.0, score))
                 if score > 0:
                     semantic_scores[entry.skill.manifest.id] = score
-            semantic_ids = sorted(
-                semantic_scores,
-                key=semantic_scores.__getitem__,
-                reverse=True,
-            )[:limit]
-            candidate_ids.update(semantic_ids)
+        semantic_ids = sorted(
+            semantic_scores,
+            key=semantic_scores.__getitem__,
+            reverse=True,
+        )[:limit]
+        candidate_ids.update(semantic_ids)
 
         redirected: dict[str, list[str]] = defaultdict(list)
         redirect_scores: dict[str, float] = {}
@@ -481,6 +511,31 @@ class SkillCatalog:
         for entry in self.entries.values():
             skill = entry.skill
             manifest = skill.manifest
+            if manifest.evolution.source_memory_ids:
+                try:
+                    instructions = (skill.path / "SKILL.md").read_text(encoding="utf-8")
+                except (OSError, UnicodeError):
+                    instructions = ""
+                inferred = infer_tool_policy(instructions)
+                if inferred.contradictory:
+                    names = ", ".join(sorted(inferred.contradictory))
+                    self.issues.append(CatalogIssue(
+                        code="contradictory-instruction-tool-policy",
+                        message=f"{manifest.id}: instructions both require and forbid {names}",
+                        skill_ids=(manifest.id,),
+                    ))
+                elif (
+                    set(manifest.tools.required) != set(inferred.required)
+                    or set(manifest.tools.forbidden) != set(inferred.forbidden)
+                ):
+                    self.issues.append(CatalogIssue(
+                        code="instruction-tool-policy-mismatch",
+                        message=(
+                            f"{manifest.id}: manifest tools do not match the explicit "
+                            "tool policy in SKILL.md"
+                        ),
+                        skill_ids=(manifest.id,),
+                    ))
             if manifest.schema_version >= 2 and manifest.routing.allow_implicit:
                 if not manifest.examples.positive:
                     self.issues.append(CatalogIssue(

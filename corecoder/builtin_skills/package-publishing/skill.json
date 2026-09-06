@@ -71,8 +71,10 @@
   ],
   "not_when": [
     "prepare release only",
+    "verify release metadata",
     "upgrade dependency",
     "仅准备发布",
+    "发布元数据核验",
     "升级依赖"
   ],
   "examples": {
@@ -83,12 +85,15 @@
     ],
     "negative": [
       "Prepare version 2.1.0 for release",
+      "Perform a read-only release metadata verification",
       "仅准备发布",
+      "只读核验发布元数据",
       "Prepare version 2.1.0 without publishing",
       "升级项目依赖"
     ],
     "hard_negative": [
       "Prepare version 2.1.0 for release",
+      "请只读核验发布元数据，不要发布软件包",
       "Upgrade Pydantic to the next major version"
     ],
     "contrastive": [

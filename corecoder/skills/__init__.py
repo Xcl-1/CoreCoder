@@ -2,6 +2,7 @@
 
 from .catalog import CatalogIssue, SkillCatalog
 from .evaluation import RoutingCase, RoutingMetrics, evaluate_router
+from .evolution import SkillEvolutionEngine
 from .lifecycle import allowed_transitions, transition_skill
 from .manager import SkillManager
 from .models import (
@@ -14,6 +15,7 @@ from .models import (
 )
 from .registry import SkillRegistry, SkillSource
 from .router import SkillRouter
+from .telemetry import SkillTelemetryStore
 
 __all__ = [
     "CatalogIssue",
@@ -24,11 +26,13 @@ __all__ = [
     "Skill",
     "SkillCandidate",
     "SkillCatalog",
+    "SkillEvolutionEngine",
     "SkillManager",
     "SkillManifest",
     "SkillRegistry",
     "SkillRouter",
     "SkillSource",
+    "SkillTelemetryStore",
     "TaskSignature",
     "allowed_transitions",
     "evaluate_router",

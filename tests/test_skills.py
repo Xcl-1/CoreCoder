@@ -7,6 +7,7 @@ import json
 import pytest
 
 from corecoder.agent import Agent, AgentRole
+from corecoder.memory import Memory
 from corecoder.models import LLMResponse
 from corecoder.skills import (
     RoutingCase,
@@ -16,6 +17,7 @@ from corecoder.skills import (
     SkillRegistry,
     SkillRouter,
     SkillSource,
+    SkillTelemetryStore,
     evaluate_router,
 )
 from corecoder.skills.loader import load_instructions, load_skill
@@ -95,6 +97,20 @@ def test_project_scope_overrides_user_scope(tmp_path):
     assert registry.get("test.alpha").manifest.summary == "project copy"
     assert registry.get("test.alpha").scope == "project"
     assert len(registry.overrides) == 1
+
+
+def test_user_skill_discovery_does_not_cross_namespace_boundaries(tmp_path):
+    user_root = tmp_path / "users-root"
+    _write_skill(user_root / "local", "test.local")
+    isolated_root = user_root / "tenants" / "acme" / "users" / "alice"
+    _write_skill(isolated_root, "test.private")
+
+    base_registry = SkillRegistry([SkillSource("user", user_root, 20)]).discover()
+    private_registry = SkillRegistry([SkillSource("user", isolated_root, 20)]).discover()
+
+    assert base_registry.get("test.local") is not None
+    assert base_registry.get("test.private") is None
+    assert private_registry.get("test.private") is not None
 
 
 def test_router_recalls_ranks_and_renders_selected_skill(tmp_path):
@@ -653,6 +669,8 @@ def test_excluding_review_does_not_activate_an_action_mismatched_skill(tmp_path)
             "devops.deployment-troubleshooting",
         ),
         ("Prepare version 2.1.0 for release", "release.preparation"),
+        ("Perform a read-only release metadata verification", "release.preparation"),
+        ("请只读核验发布元数据，不要发布软件包", "release.preparation"),
         ("Build and publish this Python package to PyPI", "release.package-publishing"),
         (
             "Add a zero-downtime migration for this database column",
@@ -1059,6 +1077,26 @@ def test_semantic_recall_can_supply_a_candidate_without_lexical_overlap(tmp_path
     assert any("semantic recall" in reason for reason in result.candidates[0].reasons)
 
 
+def test_batch_semantic_recaller_avoids_full_catalog_scoring(tmp_path):
+    _write_skill(tmp_path, "test.alpha")
+    _write_skill(tmp_path, "test.beta")
+    calls = []
+
+    def recall(query, limit):
+        calls.append((query, limit))
+        return {"test.beta": 0.95, "missing.skill": 1.0}
+
+    router = SkillRouter(
+        _registry(tmp_path),
+        semantic_scorer=lambda _query, _skill: pytest.fail("legacy scorer must not scan"),
+        semantic_recaller=recall,
+    )
+    result = router.route("vocabulary absent from every manifest")
+
+    assert result.selected_ids == ["test.beta"]
+    assert calls and calls[0][1] >= router.top_k
+
+
 def test_superseded_skill_routes_to_active_successor(tmp_path):
     _write_skill(tmp_path, "test.old")
     _write_skill(
@@ -1184,3 +1222,158 @@ def test_historical_failure_penalty_can_change_automatic_ranking(tmp_path):
         if candidate.skill.manifest.id == "test.alpha"
     )
     assert any("historical failure penalty" in reason for reason in alpha.reasons)
+
+
+def test_skill_telemetry_persists_outcomes_and_updates_router_penalty(tmp_path):
+    _write_skill(tmp_path)
+    registry = _registry(tmp_path)
+    telemetry_path = tmp_path / "state" / "telemetry.json"
+    telemetry = SkillTelemetryStore(telemetry_path)
+    manager = SkillManager(registry, SkillRouter(registry), telemetry=telemetry)
+
+    result = manager.route("fix alpha deployment", set())
+    for _ in range(3):
+        manager.record_outcome(result.selected_ids, "failure")
+
+    stats = SkillTelemetryStore(telemetry_path).stats()["test.alpha"]
+    assert stats["routes"] == 1
+    assert stats["failure_count"] == 3
+    assert manager.router.failure_penalties["test.alpha"] > 0
+
+
+@pytest.mark.asyncio
+async def test_agent_automatically_records_selected_skill_outcome(tmp_path):
+    _write_skill(tmp_path)
+    registry = _registry(tmp_path)
+    telemetry = SkillTelemetryStore(tmp_path / "telemetry.json")
+    manager = SkillManager(registry, SkillRouter(registry), telemetry=telemetry)
+    agent = Agent(llm=_CaptureLLM(), tools=[], skills=manager, replay=False)
+
+    assert await agent.chat("fix alpha deployment") == "done"
+
+    row = telemetry.stats()["test.alpha"]
+    assert row["routes"] == 1
+    assert row["success_count"] == 1
+
+
+def test_validated_procedure_creates_review_required_skill_candidate(tmp_path):
+    registry = _registry(tmp_path)
+    manager = SkillManager(registry, SkillRouter(registry))
+    memory = Memory(
+        id="verify-release",
+        title="Verify a release",
+        description="Run the release verification sequence",
+        content="Run the full suite and require every check to pass.",
+        type="procedure",
+        scope="project",
+        project_path=str(tmp_path),
+        keywords=["release", "verification"],
+        status="active",
+        validation_count=2,
+        verified_sessions=["validation-one", "validation-two"],
+    )
+
+    candidate = manager.propose_from_memory(memory)
+
+    assert candidate.manifest.id == "evolved.verify-release"
+    assert candidate.manifest.status == "candidate"
+    assert candidate.manifest.routing.allow_implicit is False
+    assert candidate.manifest.routing.rollout_percent == 0
+    assert candidate.manifest.evolution.review_required is True
+    assert candidate.manifest.evolution.source_memory_ids == ["verify-release"]
+    assert "Run the full suite" in (candidate.path / "SKILL.md").read_text(encoding="utf-8")
+    assert manager.route("Use $evolved.verify-release", set()).selected_ids == []
+
+    manager.transition(
+        "evolved.verify-release",
+        "shadow",
+        "reviewed procedure, scope, safety boundaries, and verification",
+    )
+    reviewed = manager.registry.get("evolved.verify-release")
+    assert reviewed.manifest.evolution.review_required is False
+    assert reviewed.manifest.evolution.reviewed_at
+
+
+def test_evolved_skill_inherits_explicit_procedure_tool_boundaries(tmp_path):
+    registry = _registry(tmp_path)
+    manager = SkillManager(registry, SkillRouter(registry))
+    memory = Memory(
+        id="readonly-release-verification",
+        title="Read-only release verification",
+        description="Verify release metadata without modifying files",
+        content=(
+            "允许工具仅限 read_file、grep、glob；禁止 bash、write/edit。"
+            "Read the metadata and report exact evidence."
+        ),
+        type="procedure",
+        scope="project",
+        project_path=str(tmp_path),
+        keywords=["release", "verification"],
+        status="active",
+        validation_count=2,
+        verified_sessions=["validation-one", "validation-two"],
+    )
+
+    candidate = manager.propose_from_memory(memory)
+
+    assert candidate.manifest.tools.required == ["glob", "grep", "read_file"]
+    assert candidate.manifest.tools.forbidden == [
+        "agent",
+        "bash",
+        "edit_ast",
+        "edit_file",
+        "undo_changes",
+        "write_file",
+    ]
+    instructions = (candidate.path / "SKILL.md").read_text(encoding="utf-8")
+    assert "Only use: glob, grep, read_file." in instructions
+    assert not any(
+        issue.code == "instruction-tool-policy-mismatch"
+        for issue in manager.router.catalog.issues
+    )
+
+
+def test_catalog_audits_evolved_skill_instruction_tool_policy_mismatch(tmp_path):
+    registry = _registry(tmp_path)
+    manager = SkillManager(registry, SkillRouter(registry))
+    memory = Memory(
+        id="readonly-release-verification",
+        title="Read-only release verification",
+        description="Verify release metadata without modifying files",
+        content="Only use read_file, grep, and glob; do not use bash or write_file.",
+        type="procedure",
+        scope="project",
+        project_path=str(tmp_path),
+        keywords=["release", "verification"],
+        status="active",
+        validation_count=2,
+        verified_sessions=["validation-one", "validation-two"],
+    )
+    candidate = manager.propose_from_memory(memory)
+    manifest_path = candidate.path / "skill.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["tools"] = {"required": [], "recommended": [], "forbidden": []}
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    router = SkillRouter(_registry(tmp_path))
+
+    assert any(
+        issue.code == "instruction-tool-policy-mismatch"
+        for issue in router.catalog.issues
+    )
+
+
+def test_unvalidated_or_non_procedure_memory_cannot_create_skill(tmp_path):
+    manager = SkillManager(_registry(tmp_path), SkillRouter(_registry(tmp_path)))
+    unvalidated = Memory(
+        id="weak-procedure",
+        title="Weak procedure",
+        description="Not independently verified",
+        content="Do something once.",
+        type="procedure",
+        scope="project",
+        status="candidate",
+        validation_count=1,
+    )
+    with pytest.raises(ValueError, match="two independent validations"):
+        manager.propose_from_memory(unvalidated)

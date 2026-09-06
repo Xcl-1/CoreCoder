@@ -7,10 +7,12 @@ import math
 import re
 
 from .catalog import (
+    SemanticRecaller,
     SemanticScorer,
     SkillCatalog,
     expanded_tokens,
     phrase_matches,
+    positive_intent,
     token_similarity,
 )
 from .loader import SkillLoadError, load_instructions, load_mode_resources
@@ -61,6 +63,7 @@ class SkillRouter:
         clarify_confidence: float = 0.65,
         ambiguity_margin: float = 0.12,
         semantic_scorer: SemanticScorer | None = None,
+        semantic_recaller: SemanticRecaller | None = None,
         failure_penalties: dict[str, float] | None = None,
     ):
         if top_k < 1:
@@ -96,10 +99,24 @@ class SkillRouter:
             if not math.isfinite(value) or value < 0:
                 raise ValueError("failure penalties must be finite non-negative numbers")
             self.failure_penalties[skill_id] = min(0.3, value)
-        self.catalog = SkillCatalog(registry, semantic_scorer=semantic_scorer)
+        self.catalog = SkillCatalog(
+            registry,
+            semantic_scorer=semantic_scorer,
+            semantic_recaller=semantic_recaller,
+        )
 
     def refresh_catalog(self) -> None:
         self.catalog.refresh()
+
+    def set_failure_penalties(self, penalties: dict[str, float]) -> None:
+        """Replace runtime penalties with validated, bounded feedback values."""
+        updated: dict[str, float] = {}
+        for skill_id, penalty in penalties.items():
+            value = float(penalty)
+            if not math.isfinite(value) or value < 0:
+                continue
+            updated[skill_id] = min(0.3, value)
+        self.failure_penalties = updated
 
     def route(
         self,
@@ -196,6 +213,7 @@ class SkillRouter:
         # boundaries, rollout) cannot starve otherwise valid candidates.
         recall_limit = max(limit * 3, limit + 10)
         signature = self.catalog.signature_for(query, context)
+        query = positive_intent(query)
         context_tokens = {
             token
             for values in signature.dimensions().values()

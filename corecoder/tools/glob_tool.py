@@ -3,6 +3,12 @@
 from pathlib import Path
 
 from .base import Tool
+from .sensitive import sensitive_path
+
+_SKIP_DIRS = {
+    ".git", ".corecoder", ".test_runs", "replays", "node_modules", "__pycache__",
+    ".venv", "venv", ".tox", "dist", "build",
+}
 
 
 class GlobTool(Tool):
@@ -36,7 +42,12 @@ class GlobTool(Tool):
             if not base.is_dir():
                 return f"Error: {path} is not a directory"
 
-            hits = list(base.glob(pattern))
+            hits = [
+                hit
+                for hit in base.glob(pattern)
+                if not sensitive_path(hit)
+                and not any(part in _SKIP_DIRS for part in hit.relative_to(base).parts)
+            ]
             # sort by mtime, newest first
             hits.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
 

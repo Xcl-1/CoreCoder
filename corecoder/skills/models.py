@@ -193,6 +193,16 @@ class SkillLifecycleState(BaseModel):
     reason: str = Field(default="", max_length=500)
 
 
+class SkillEvolutionState(BaseModel):
+    """Provenance and review state for a memory-derived Skill candidate."""
+
+    source_memory_ids: list[str] = Field(default_factory=list, max_length=20)
+    generated_at: str = ""
+    review_required: bool = False
+    reviewed_at: str = ""
+    review_reason: str = Field(default="", max_length=500)
+
+
 class SkillManifest(BaseModel):
     """The small machine-readable portion loaded during discovery."""
 
@@ -216,6 +226,7 @@ class SkillManifest(BaseModel):
     resource_modes: list[SkillResourceMode] = Field(default_factory=list, max_length=20)
     routing: SkillRoutingPolicy = Field(default_factory=SkillRoutingPolicy)
     lifecycle: SkillLifecycleState = Field(default_factory=SkillLifecycleState)
+    evolution: SkillEvolutionState = Field(default_factory=SkillEvolutionState)
     conflicts_with: list[str] = Field(default_factory=list, max_length=10)
     exclusive_group: str | None = Field(default=None, max_length=80)
     token_budget: int = Field(default=1800, ge=200, le=12000)

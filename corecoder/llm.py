@@ -113,7 +113,7 @@ class LLM:
         """Send messages, stream back response, handle tool calls."""
         params: dict = {
             "model": self.model,
-            "messages": messages,
+            "messages": self._prepare_messages(messages),
             "stream": True,
             **self.extra,
         }
@@ -130,7 +130,7 @@ class LLM:
             # Keep the provider-specific import lazy along with the SDK itself.
             from openai import BadRequestError
 
-            if not isinstance(exc, BadRequestError):
+            if not isinstance(exc, BadRequestError) or "stream_options" not in str(exc):
                 raise
             params.pop("stream_options", None)
             stream = self._call_with_retry(params)
@@ -207,6 +207,19 @@ class LLM:
             completion_tokens=completion_tok,
         )
 
+    def _prepare_messages(self, messages: list[dict]) -> list[dict]:
+        """Keep provider reasoning opaque; strip local execution metadata."""
+        deepseek = "deepseek" in self.model.lower() or "api.deepseek.com" in str(getattr(self, "base_url", ""))
+        prepared = []
+        for message in messages:
+            item = {k: v for k, v in message.items() if not k.startswith("_")}
+            if deepseek and item.get("role") == "assistant" and item.get("reasoning_content") is None:
+                # Synthetic context acknowledgements and empty reasoning deltas
+                # still need the field. Never replace reasoning that was returned.
+                item["reasoning_content"] = ""
+            prepared.append(item)
+        return prepared
+
     def _call_with_retry(self, params: dict, max_retries: int = 3):
         """Retry on transient errors with exponential backoff."""
         from openai import APIConnectionError, APIError, APITimeoutError, RateLimitError
@@ -274,7 +287,7 @@ class LiteLLM(LLM):
         """Send messages via litellm, stream back response, handle tool calls."""
         params: dict = {
             "model": self.model,
-            "messages": messages,
+            "messages": self._prepare_messages(messages),
             "stream": True,
             **self.extra,
         }

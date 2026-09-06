@@ -45,6 +45,7 @@ class Memory(BaseModel):
     success_count: int = Field(default=0, ge=0)
     failure_count: int = Field(default=0, ge=0)
     validation_count: int = Field(default=0, ge=0)
+    verified_sessions: list[str] = Field(default_factory=list)
     validated_at: str | None = None
     status: MemoryStatus = "active"
     supersedes: str | None = None
@@ -74,6 +75,8 @@ class SessionReflection(BaseModel):
 
     task_summary: str = ""
     outcome: ReflectionOutcome = "unknown"
+    deliverable_complete: bool = False
+    constraints_satisfied: bool = False
     summary: str = ""
     failures: list[str] = Field(default_factory=list)
     root_causes: list[str] = Field(default_factory=list)

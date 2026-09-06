@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from .base import Tool
+from .sensitive import sensitive_path
 
 
 class ReadFileTool(Tool):
@@ -36,6 +37,8 @@ class ReadFileTool(Tool):
 
     def _execute_sync(self, file_path: str, offset: int = 1, limit: int = 2000) -> str:
         try:
+            if sensitive_path(Path(file_path)):
+                return "[Security] Blocked: credential files cannot be read; inspect source or a sanitized example."
             p = Path(file_path).expanduser().resolve()
             if not p.exists():
                 return f"Error: {file_path} not found"

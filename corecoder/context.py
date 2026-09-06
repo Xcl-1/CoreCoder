@@ -70,6 +70,8 @@ def estimate_tokens(messages: list[dict]) -> int:
             total += _approx_tokens(content)
         if m.get("tool_calls"):
             total += _approx_tokens(str(m["tool_calls"]))
+        if m.get("reasoning_content"):
+            total += _approx_tokens(str(m["reasoning_content"]))
     return total
 
 
@@ -201,6 +203,7 @@ class ContextManager:
 
         new_material = messages[self._last_summary_index:split]
         tail = messages[split:]
+        current_request = self._current_request(messages, split)
 
         summary = self._merge_summary(llm, self._summary_text, new_material)
         if not summary:
@@ -219,6 +222,8 @@ class ContextManager:
             "role": "assistant",
             "content": "Understood. I have the full context.",
         })
+        if current_request is not None:
+            messages.append(current_request)
         messages.extend(tail)
 
         # after rebuild, the summary covers everything before the tail
@@ -271,7 +276,7 @@ class ContextManager:
             m = messages[i]
             role = m.get("role", "")
 
-            if role in ("system",):
+            if role in ("system", "user"):
                 continue  # never touch
             if role == "user" and i >= split - 4:
                 continue  # keep recent user messages
@@ -293,6 +298,7 @@ class ContextManager:
         """Layer 3: Emergency compression. Keep only last 4 + summary."""
         split = self._safe_split(messages, 4 if len(messages) > 4 else 2)
         tail = messages[split:]
+        current_request = self._current_request(messages, split)
         summary = self._get_summary(messages[:split], llm)
 
         messages.clear()
@@ -304,6 +310,8 @@ class ContextManager:
             "role": "assistant",
             "content": "Context restored. Continuing from where we left off.",
         })
+        if current_request is not None:
+            messages.append(current_request)
         messages.extend(tail)
 
         # reset incremental state since we nuked everything
@@ -340,6 +348,14 @@ class ContextManager:
                 logger.debug("Hard collapse summarisation failed, falling back to regex extraction", exc_info=True)
 
         return self._extract_key_info(messages)
+
+    @staticmethod
+    def _current_request(messages: list[dict], split: int) -> dict | None:
+        for index in range(len(messages) - 1, -1, -1):
+            message = messages[index]
+            if message.get("role") == "user":
+                return dict(message) if index < split else None
+        return None
 
     @staticmethod
     def _safe_split(messages: list[dict], keep_recent: int) -> int:
