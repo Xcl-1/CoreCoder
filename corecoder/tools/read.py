@@ -12,6 +12,8 @@ class ReadFileTool(Tool):
     output_type = "numbered_text"
     permission_scope = "filesystem:read"
     side_effect = "none"
+    network_access = "none"
+    declared_risk = "low"
     description = (
         "Read a file's contents with line numbers. "
         "Always read a file before editing it."

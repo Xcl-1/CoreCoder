@@ -19,6 +19,8 @@ class GrepTool(Tool):
     output_type = "search_matches"
     permission_scope = "filesystem:read"
     side_effect = "none"
+    network_access = "none"
+    declared_risk = "low"
     description = (
         "Search file contents with regex. "
         "Returns matching lines with file path and line number."

@@ -26,6 +26,8 @@ class EditASTTool(Tool):
     output_type = "diff"
     permission_scope = "filesystem:write"
     side_effect = "local_write"
+    network_access = "none"
+    declared_risk = "medium"
     description = (
         "Edit Python code using AST-aware operations. "
         "Safer than edit_file for structural changes like renaming functions "

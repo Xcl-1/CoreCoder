@@ -5,7 +5,7 @@ for file writes.  Controlled by the ``CORECODER_SANDBOX`` env var.
 
 Design principles:
 - Zero additional dependencies (uses ``subprocess`` for Docker, same as BashTool)
-- Docker is optional — graceful fallback when not installed
+- Docker is optional; when explicitly requested, unavailability fails closed
 - Path whitelist blocks writes to system-sensitive directories
 """
 
@@ -16,7 +16,7 @@ from pathlib import Path
 # ---- path whitelist -------------------------------------------------------
 
 # directories that tools are NEVER allowed to write to
-_BLOCKED_DIRS = [
+_POSIX_BLOCKED_DIRS = [
     "/etc",
     "/boot",
     "/System",
@@ -34,26 +34,34 @@ _BLOCKED_GLOBS = [
 def _resolve_blocked() -> set[Path]:
     """Resolve blocked globs to absolute paths."""
     blocked: set[Path] = set()
-    for d in _BLOCKED_DIRS:
+    if os.name == "nt":
+        candidates = [
+            os.environ.get("SystemRoot"),
+            os.environ.get("ProgramFiles"),
+            os.environ.get("ProgramFiles(x86)"),
+            os.environ.get("ProgramData"),
+        ]
+    else:
+        candidates = _POSIX_BLOCKED_DIRS
+    for d in candidates:
+        if not d:
+            continue
         p = Path(d)
         try:
-            if p.exists():
-                blocked.add(p.resolve())
+            blocked.add(p.resolve())
         except OSError:
             # An unreadable sensitive path should never make package import fail.
             blocked.add(p.absolute())
     for g in _BLOCKED_GLOBS:
         p = Path(g).expanduser()
         try:
-            if p.exists():
-                blocked.add(p.resolve())
+            blocked.add(p.resolve())
         except OSError:
             blocked.add(p.absolute())
     return blocked
 
 
-# cached at import time — if the user creates ~/.ssh after startup they
-# have bigger problems
+# Resolved once at import; nonexistent credential directories are included too.
 _BLOCKED_PATHS: set[Path] = _resolve_blocked()
 
 
@@ -67,6 +75,12 @@ def is_write_blocked(target: str | Path) -> bool:
     except (OSError, RuntimeError):
         return True  # can't even resolve it — deny
 
+    # Credential paths remain protected even if their parent directory does
+    # not exist yet (otherwise creating ~/.ssh would bypass the import cache).
+    from .tools.sensitive import sensitive_path
+    if sensitive_path(Path(target)):
+        return True
+
     for blocked in _BLOCKED_PATHS:
         try:
             resolved.relative_to(blocked)
@@ -79,6 +93,10 @@ def is_write_blocked(target: str | Path) -> bool:
 # ---- Docker sandbox -------------------------------------------------------
 
 _DOCKER_AVAILABLE: bool | None = None  # None = unchecked
+
+
+class SandboxUnavailableError(RuntimeError):
+    """Raised when isolation was required but cannot be provided."""
 
 
 def docker_available() -> bool:
@@ -110,16 +128,27 @@ def wrap_command(command: str, cwd: str | None = None) -> str:
     unprivileged Alpine image.  Docker mode only applies when the user
     has set ``CORECODER_SANDBOX=1`` AND Docker is available.
 
-    Returns the original command unchanged if Docker isn't available.
+    Raises ``SandboxUnavailableError`` when isolation was explicitly requested
+    but Docker cannot provide it. Silent fallback would run an untrusted
+    command on the host with more authority than the user selected.
     """
-    if not sandbox_enabled() or not docker_available():
+    if not sandbox_enabled():
         return command
+    if not docker_available():
+        raise SandboxUnavailableError("sandbox requested but Docker is unavailable")
+
+    network_mode = os.getenv("CORECODER_SANDBOX_NETWORK", "none").strip().lower()
+    if network_mode not in {"none", "bridge"}:
+        raise SandboxUnavailableError(
+            "CORECODER_SANDBOX_NETWORK must be 'none' or 'bridge'"
+        )
 
     workdir = cwd or os.getcwd()
     # escape single quotes in the command for the sh -c wrapper
     escaped = command.replace("'", "'\\''")
     return (
         f"docker run --rm "
+        f"{'--network none ' if network_mode == 'none' else ''}"
         f"-v '{workdir}':'{workdir}' "
         f"-w '{workdir}' "
         f"alpine:latest sh -c '{escaped}'"

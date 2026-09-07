@@ -30,6 +30,13 @@ def test_all_tools_have_valid_schema():
         assert "required" in params
 
 
+def test_all_tools_declare_security_capabilities():
+    for tool in ALL_TOOLS:
+        cls = type(tool)
+        for field in ("permission_scope", "side_effect", "network_access", "declared_risk"):
+            assert field in cls.__dict__, f"{tool.name} must explicitly declare {field}"
+
+
 # --- bash ---
 
 @pytest.mark.asyncio

@@ -40,6 +40,8 @@ ENV_KEYS = [
     "CORECODER_CONTEXT_ARTIFACT_MAX_MB",
     "CORECODER_TENANT_ID",
     "CORECODER_USER_ID",
+    "CORECODER_NETWORK_MODE",
+    "CORECODER_NETWORK_ALLOWLIST",
     "OPENAI_BASE_URL",
     "CORECODER_BASE_URL",
 ]
@@ -149,6 +151,14 @@ def test_context_artifact_configuration(monkeypatch, tmp_path):
     assert config.context_artifact_threshold == 24_000
     assert config.context_artifact_ttl_days == 14
     assert config.context_artifact_max_mb == 512
+
+
+def test_network_policy_configuration(monkeypatch):
+    monkeypatch.setenv("CORECODER_NETWORK_MODE", "deny")
+    monkeypatch.setenv("CORECODER_NETWORK_ALLOWLIST", "api.example.com, *.pythonhosted.org")
+    config = Config.from_env()
+    assert config.network_mode == "deny"
+    assert config.network_allowlist == ("api.example.com", "*.pythonhosted.org")
 
 
 def test_skill_configuration(monkeypatch, tmp_path):
@@ -311,6 +321,8 @@ def test_memory_dir_default_expands_home(monkeypatch):
         ("CORECODER_CONTEXT_ARTIFACT_THRESHOLD", "999"),
         ("CORECODER_CONTEXT_ARTIFACT_TTL_DAYS", "0"),
         ("CORECODER_CONTEXT_ARTIFACT_MAX_MB", "invalid"),
+        ("CORECODER_NETWORK_MODE", "open"),
+        ("CORECODER_NETWORK_ALLOWLIST", "https://example.com"),
     ],
 )
 def test_invalid_env_raises(monkeypatch, key, raw):

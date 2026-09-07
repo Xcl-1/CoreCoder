@@ -23,6 +23,8 @@ class EditFileTool(Tool):
     output_type = "diff"
     permission_scope = "filesystem:write"
     side_effect = "local_write"
+    network_access = "none"
+    declared_risk = "medium"
     description = (
         "Edit a file by replacing an exact string match. "
         "old_string must appear exactly once in the file for safety. "

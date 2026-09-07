@@ -29,6 +29,8 @@ class BashTool(Tool):
     output_type = "process_result"
     permission_scope = "process:execute"
     side_effect = "dynamic"
+    network_access = "dynamic"
+    declared_risk = "medium"
     description = (
         "Execute a shell command. Returns stdout, stderr, and exit code. "
         "Use this for running tests, installing packages, git operations, etc."
@@ -58,7 +60,10 @@ class BashTool(Tool):
         cwd = _cwd_context.get() or os.getcwd()
 
         # sandbox wrapping (no-op if CORECODER_SANDBOX is not set)
-        command = wrap_command(command, cwd=cwd)
+        try:
+            command = wrap_command(command, cwd=cwd)
+        except RuntimeError as exc:
+            return f"[Security] Blocked: {exc}"
 
         try:
             proc = await asyncio.create_subprocess_shell(

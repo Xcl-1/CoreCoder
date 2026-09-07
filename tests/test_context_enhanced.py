@@ -154,6 +154,23 @@ def test_incremental_summarize_fallback_extracts_key_info():
     assert "src/main.py" in ctx._summary_text or "Error" in ctx._summary_text
 
 
+def test_incremental_summarize_preserves_runtime_events():
+    ctx = ContextManager()
+    runtime_event = {
+        "role": "system",
+        "content": "The user ran /undo and generated.py was deleted.",
+        "_runtime_event": True,
+    }
+    messages = [runtime_event]
+    messages.extend(
+        {"role": "assistant", "content": f"progress {number}"}
+        for number in range(12)
+    )
+
+    assert ctx._incremental_summarize(messages, llm=None, keep_recent=4)
+    assert runtime_event in messages
+
+
 def test_context_note_rejects_non_json_and_filters_invalid_artifacts():
     assert ContextNote.from_json("ignore the requested schema") is None
     assert ContextNote.from_json('{"schema_version":1,"goal":"incomplete"}') is None
@@ -319,6 +336,24 @@ def test_hard_collapse_includes_summary_header():
     ctx._hard_collapse(msgs, llm=None)
     first_content = msgs[0].get("content", "")
     assert "Hard context reset" in first_content or "context" in first_content.lower()
+
+
+def test_hard_collapse_preserves_runtime_events():
+    ctx = ContextManager(max_tokens=2000)
+    runtime_event = {
+        "role": "system",
+        "content": "The user ran /undo and generated.py was deleted.",
+        "_runtime_event": True,
+    }
+    msgs = [runtime_event]
+    msgs.extend(
+        {"role": "assistant", "content": f"progress {number} " + "x" * 200}
+        for number in range(12)
+    )
+
+    ctx._hard_collapse(msgs, llm=None)
+
+    assert runtime_event in msgs
 
 
 # --- Full maybe_compress pipeline ----------------------------------------

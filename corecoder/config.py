@@ -120,6 +120,8 @@ class Config:
     context_artifact_max_mb: int = 256
     tenant_id: str = ""
     user_id: str = ""
+    network_mode: str = "confirm"
+    network_allowlist: tuple[str, ...] = ()
 
     @property
     def memory_data_dir(self) -> Path:
@@ -178,6 +180,12 @@ class Config:
         context_artifact_max_mb_raw = os.getenv("CORECODER_CONTEXT_ARTIFACT_MAX_MB", "256")
         tenant_id = validate_namespace(os.getenv("CORECODER_TENANT_ID", ""), "CORECODER_TENANT_ID")
         user_id = validate_namespace(os.getenv("CORECODER_USER_ID", ""), "CORECODER_USER_ID")
+        network_mode = os.getenv("CORECODER_NETWORK_MODE", "confirm").strip().lower()
+        network_allowlist = tuple(
+            host.strip()
+            for host in os.getenv("CORECODER_NETWORK_ALLOWLIST", "").split(",")
+            if host.strip()
+        )
 
         # --- validation --------------------------------------------------
         try:
@@ -236,6 +244,11 @@ class Config:
             raise ValueError(
                 f"CORECODER_SKILLS must be a boolean, got: {skills_raw!r}"
             )
+        from .security import NetworkPolicy
+        try:
+            validated_network = NetworkPolicy(network_mode, network_allowlist)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid CoreCoder network policy: {exc}") from exc
         if context_artifacts_raw not in ("1", "true", "yes", "0", "false", "no"):
             raise ValueError(
                 "CORECODER_CONTEXT_ARTIFACTS must be a boolean, "
@@ -334,4 +347,6 @@ class Config:
             context_artifact_max_mb=context_artifact_max_mb,
             tenant_id=tenant_id,
             user_id=user_id,
+            network_mode=validated_network.mode,
+            network_allowlist=validated_network.allowed_hosts,
         )

@@ -47,6 +47,22 @@ def test_executor_gets_all_tools():
     assert len(tools) == len(ALL_TOOLS)
 
 
+def test_runtime_event_is_folded_into_system_prompt_not_conversation():
+    agent = Agent(llm=LLM.__new__(LLM), tools=[], replay=False)
+    agent.messages.append({"role": "user", "content": "Where is generated.txt?"})
+
+    agent.record_runtime_event(
+        "The user ran /undo; deleted_paths contains generated.txt."
+    )
+
+    messages = agent._full_messages()
+    assert "Trusted CoreCoder Runtime Events" in messages[0]["content"]
+    assert "deleted_paths contains generated.txt" in messages[0]["content"]
+    assert messages[1:] == [{"role": "user", "content": "Where is generated.txt?"}]
+    assert agent.messages[-1]["_runtime_event"] is True
+    assert agent._turn_messages == []
+
+
 @pytest.mark.asyncio
 async def test_empty_length_response_gets_one_tool_free_finalization_attempt():
     class _SequenceLLM:

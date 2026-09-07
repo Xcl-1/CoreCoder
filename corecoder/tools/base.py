@@ -5,6 +5,9 @@ from abc import ABC
 from typing import Literal
 
 ToolSideEffect = Literal["none", "local_write", "dynamic", "delegated"]
+ToolOutputTrust = Literal["trusted", "untrusted"]
+ToolNetworkAccess = Literal["none", "dynamic", "delegated"]
+ToolDeclaredRisk = Literal["low", "medium", "high", "critical"]
 
 
 class Tool(ABC):
@@ -25,6 +28,12 @@ class Tool(ABC):
     output_type: str = "text"
     permission_scope: str = "workspace"
     side_effect: ToolSideEffect = "dynamic"
+    network_access: ToolNetworkAccess = "dynamic"
+    declared_risk: ToolDeclaredRisk = "high"
+    # Unknown output is data from outside the policy layer and is therefore
+    # untrusted by default. Tools may explicitly opt into trusted status only
+    # for fixed, implementation-generated acknowledgements.
+    output_trust: ToolOutputTrust = "untrusted"
 
     async def execute(self, **kwargs) -> str:
         """Run the tool and return a text result.

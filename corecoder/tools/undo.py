@@ -10,6 +10,8 @@ class UndoChangesTool(Tool):
     output_type = "undo_result"
     permission_scope = "filesystem:write"
     side_effect = "local_write"
+    network_access = "none"
+    declared_risk = "high"
     description = (
         "Undo all file changes made through CoreCoder write/edit tools in the current session. "
         "Only use when the user explicitly asks to undo or revert the current changes. "

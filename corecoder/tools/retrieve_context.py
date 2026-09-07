@@ -8,6 +8,12 @@ from .base import Tool
 
 class RetrieveContextTool(Tool):
     name = "retrieve_context"
+    input_types = ("artifact_id", "query", "line_range")
+    output_type = "artifact_text"
+    permission_scope = "context:read"
+    side_effect = "none"
+    network_access = "none"
+    declared_risk = "low"
     description = (
         "Retrieve exact text from a large tool result that was externalized from "
         "the conversation. Use its artifact://sha256/... id, optionally with a "
@@ -43,11 +49,6 @@ class RetrieveContextTool(Tool):
         },
         "required": ["artifact_id"],
     }
-    input_types = ("context_artifact",)
-    output_type = "text"
-    permission_scope = "session"
-    side_effect = "none"
-
     def __init__(self, store: ContextArtifactStore):
         self.store = store
 

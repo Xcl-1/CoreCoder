@@ -208,10 +208,31 @@ class Agent:
             system = f"{system}\n\n{self._memory_prompt}"
         if self._skill_prompt:
             system = f"{system}\n\n{self._skill_prompt}"
+        runtime_events = [
+            str(message.get("content", "")).strip()
+            for message in self.messages
+            if message.get("_runtime_event") and message.get("content")
+        ]
+        if runtime_events:
+            system = (
+                f"{system}\n\n# Trusted CoreCoder Runtime Events\n"
+                + "\n\n".join(runtime_events[-20:])
+            )
         return [{"role": "system", "content": system}] + [
             {k: v for k, v in message.items() if not k.startswith("_")}
             for message in self.messages
+            if not message.get("_runtime_event")
         ]
+
+    def record_runtime_event(self, content: str) -> None:
+        """Persist a trusted CLI event without treating it as user/model speech."""
+        normalized = content.strip()
+        if normalized:
+            self.messages.append({
+                "role": "system",
+                "content": normalized,
+                "_runtime_event": True,
+            })
 
     def _append_message(self, message: dict) -> None:
         self.messages.append(message)
@@ -309,6 +330,8 @@ class Agent:
                    routing_context: RoutingContext | dict | None = None) -> str:
         self._turn_messages = []
         self._policy_violations = 0
+        if self.guard is not None and hasattr(self.guard, "begin_turn"):
+            self.guard.begin_turn()
         status = "failed"
         try:
             answer = await self._chat(user_input, on_token, on_tool, routing_context)
@@ -505,7 +528,11 @@ class Agent:
         # ---- security review ----
         security_confirmed = False
         if self.guard is not None:
-            decision = self.guard.review(tc.name, tc.arguments)
+            review_parameters = inspect.signature(self.guard.review).parameters
+            if "tool" in review_parameters:
+                decision = self.guard.review(tc.name, tc.arguments, tool=tool)
+            else:  # compatibility with lightweight third-party/test guards
+                decision = self.guard.review(tc.name, tc.arguments)
             if not decision.allowed:
                 self._policy_violations += 1
                 return f"[Security] Blocked: {decision.reason}", 0, False
@@ -545,11 +572,20 @@ class Agent:
                 result = await tool.execute(**tc.arguments)
             if result.startswith("[Security]"):
                 self._policy_violations += 1
-            # ---- output sanitisation ----
-            if self.guard is not None:
-                result = self.guard.sanitize(result)
-            elapsed = (time.monotonic() - t0) * 1000
+            # Determine status before provenance labelling changes the first
+            # line of a successful tool result.
             success = not result.startswith(("Error", "[Security]"))
+            # ---- output sanitisation and untrusted-content labelling ----
+            if self.guard is not None:
+                if hasattr(self.guard, "inspect_output") and not result.startswith("[Security]"):
+                    result = self.guard.inspect_output(
+                        tc.name,
+                        result,
+                        untrusted=getattr(tool, "output_trust", "untrusted") == "untrusted",
+                    )
+                else:
+                    result = self.guard.sanitize(result)
+            elapsed = (time.monotonic() - t0) * 1000
             if not success:
                 logger.debug("Tool %s failed: %s", tc.name, result[:200])
             return result, elapsed, success

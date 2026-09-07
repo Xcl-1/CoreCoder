@@ -13,6 +13,8 @@ class WriteFileTool(Tool):
     output_type = "write_result"
     permission_scope = "filesystem:write"
     side_effect = "local_write"
+    network_access = "none"
+    declared_risk = "medium"
     description = (
         "Create a new file or completely overwrite an existing one. "
         "For small edits to existing files, prefer edit_file instead."

@@ -2,6 +2,8 @@
 
 import os
 
+import pytest
+
 from corecoder.sandbox import docker_available, is_write_blocked, sandbox_enabled, wrap_command
 
 # --- path whitelist ------------------------------------------------------
@@ -21,8 +23,19 @@ def test_is_write_blocked_ssh(tmp_path):
     """Writing to ~/.ssh should be blocked."""
     home = os.path.expanduser("~")
     ssh_path = os.path.join(home, ".ssh", "authorized_keys")
-    if os.path.exists(os.path.join(home, ".ssh")):
-        assert is_write_blocked(ssh_path)
+    assert is_write_blocked(ssh_path)
+
+
+def test_is_write_blocked_credentials_even_before_parent_exists(tmp_path):
+    assert is_write_blocked(tmp_path / ".ssh" / "authorized_keys")
+    assert is_write_blocked(tmp_path / ".env")
+    assert is_write_blocked(tmp_path / "service-account.pem")
+    assert not is_write_blocked(tmp_path / ".env.example")
+
+
+def test_is_write_blocked_windows_system_root():
+    if os.name == "nt" and os.environ.get("SystemRoot"):
+        assert is_write_blocked(os.path.join(os.environ["SystemRoot"], "System32", "drivers", "etc", "hosts"))
 
 
 def test_is_write_blocked_normal_path_not_blocked(tmp_path):
@@ -85,14 +98,12 @@ def test_wrap_command_no_sandbox(monkeypatch):
     assert wrap_command(cmd) == cmd  # unchanged when sandbox is off
 
 
-def test_wrap_command_with_sandbox_no_docker(monkeypatch):
-    """When sandbox is on but Docker is not available, command is passed through."""
+def test_wrap_command_with_sandbox_no_docker_fails_closed(monkeypatch):
+    """Requested isolation must never silently fall back to host execution."""
     monkeypatch.setenv("CORECODER_SANDBOX", "1")
-    # docker_available() checks actual system — on CI Docker may or may not be present
-    # We just verify the function runs without error
-    result = wrap_command("echo hello")
-    assert isinstance(result, str)
-    assert "echo hello" in result  # either passed through or wrapped
+    monkeypatch.setattr("corecoder.sandbox.docker_available", lambda: False)
+    with pytest.raises(RuntimeError, match="Docker is unavailable"):
+        wrap_command("echo hello")
 
 
 def test_docker_available_returns_bool():
@@ -103,5 +114,23 @@ def test_docker_available_returns_bool():
 def test_wrap_command_preserves_command_semantics(monkeypatch):
     """Even when wrapped, the original command should appear in the result."""
     monkeypatch.setenv("CORECODER_SANDBOX", "1")
+    monkeypatch.setattr("corecoder.sandbox.docker_available", lambda: True)
     result = wrap_command("python -c 'print(1)'")
     assert "python" in result
+    assert "--network none" in result
+
+
+def test_sandbox_bridge_network_requires_explicit_opt_in(monkeypatch):
+    monkeypatch.setenv("CORECODER_SANDBOX", "1")
+    monkeypatch.setenv("CORECODER_SANDBOX_NETWORK", "bridge")
+    monkeypatch.setattr("corecoder.sandbox.docker_available", lambda: True)
+    result = wrap_command("curl https://example.com")
+    assert "--network none" not in result
+
+
+def test_invalid_sandbox_network_mode_fails_closed(monkeypatch):
+    monkeypatch.setenv("CORECODER_SANDBOX", "1")
+    monkeypatch.setenv("CORECODER_SANDBOX_NETWORK", "host")
+    monkeypatch.setattr("corecoder.sandbox.docker_available", lambda: True)
+    with pytest.raises(RuntimeError, match="must be 'none' or 'bridge'"):
+        wrap_command("echo hello")

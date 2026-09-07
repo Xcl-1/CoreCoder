@@ -26,6 +26,30 @@ _DANGEROUS_PATTERNS: list[tuple[str, str]] = [
     (r":\(\)\s*\{.*:\|:.*\}", "fork bomb"),
     (r"\bcurl\b.*\|\s*(sudo\s+)?(ba)?sh\b", "pipe curl to shell"),
     (r"\bwget\b.*\|\s*(sudo\s+)?(ba)?sh\b", "pipe wget to shell"),
+    # Windows / PowerShell destructive equivalents.
+    (
+        (
+            r"\b(?:remove-item|ri)\b"
+            r"(?=[^\r\n]*-(?:r|re|rec|recu|recur|recurs|recurse)\b)"
+            r"[^\r\n]*(?:[a-z]:\\(?:\s|[\\*]|$)|\\\\)"
+        ),
+        "recursive delete on a Windows root",
+    ),
+    (
+        (
+            r"\b(?:del|erase|rd|rmdir)\b(?=[^\r\n]*/s\b)"
+            r"[^\r\n]*(?:[a-z]:\\(?:\s|[\\*]|$)|\\\\)"
+        ),
+        "recursive delete on a Windows root",
+    ),
+    (r"\bformat(?:\.com)?\s+[a-z]:", "format Windows volume"),
+    (r"\b(?:clear-disk|initialize-disk|remove-partition)\b", "destructive disk operation"),
+    (r"\b(?:shutdown|reboot|stop-computer|restart-computer)\b", "host shutdown or restart"),
+    (
+        r"\b(?:powershell|pwsh)(?:\.exe)?\b[^\r\n]*\s-(?:e|en|enc|enco|encod|encode|encoded|encodedcommand)\b",
+        "opaque encoded PowerShell command",
+    ),
+    (r"\b(?:invoke-expression|iex)\b", "dynamic PowerShell expression execution"),
 ]
 
 # Guard-only rules. These are intentionally separate from check_dangerous(),
@@ -90,6 +114,7 @@ def builtin_rules():
             reason=reason,
             priority=-10,
             source="builtin",
+            hard_boundary=True,
         ))
 
     # ---- safe shell commands — allow without asking ----
@@ -103,6 +128,17 @@ def builtin_rules():
             source="builtin",
         ))
 
+    # Unknown shell commands are reviewable, not silently executable and not
+    # permanently unusable. Hard denials above still win before this fallback.
+    rules.append(PermissionRule(
+        tool_name="bash",
+        pattern=r".*",
+        action="ask",
+        reason="shell command is not in the read-only allowlist",
+        priority=-100,
+        source="builtin",
+    ))
+
     # ---- read tools — always allow ----
     for name in ("read_file", "grep", "glob", "retrieve_context"):
         rules.append(PermissionRule(
@@ -114,13 +150,13 @@ def builtin_rules():
             source="builtin",
         ))
 
-    # ---- write tools — allow (sandbox checks separately) ----
+    # ---- write tools — allow (filesystem safety checks separately) ----
     for name in ("write_file", "edit_file", "edit_ast"):
         rules.append(PermissionRule(
             tool_name=name,
             pattern=r".*",
             action="allow",
-            reason="write tool — sandbox policy applies separately",
+            reason="write tool — filesystem safety policy applies separately",
             priority=-10,
             source="builtin",
         ))

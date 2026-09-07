@@ -190,12 +190,28 @@ README 只给方向，每条的代码细节第七篇接着讲。挑一个动手�
 /memory show <id> / search <查询> / archive <id> / approve <id> / reflect
 /skills          列出内置、用户和项目 Skill
 /skill search <查询> / show <id> / use <id> / unuse <id> / explain / audit / metrics / evolve <memory-id>
+/permissions [user|session|project|builtin] 查看规则及稳定 ID
+/permissions clear-session /revoke <id> 删除可变授权
+/security explain <工具> <JSON|bash 命令> 仅预演策略，不执行
+/audit [筛选] [条数] [tool=<名称>] 查询最近的安全决策
 quit / exit      退出（Ctrl+C 取消当前回合）
 ```
 
 完整对话会在每轮结束后自动保存到 `~/.corecoder/sessions`；`/save` 可手动建立检查点，`/sessions` 列出全部历史会话，`corecoder -r <ID>` 可恢复续聊，并在交互模式下回显已保存的用户与助手消息。为保持终端清晰，历史工具结果默认隐藏。会话 ID 会先清洗成安全字符，恶意名称无法路径穿越。
 
 `/undo` 会恢复当前 CoreCoder 进程中由 `write_file`、`edit_file` 或 `edit_ast` 修改文件的原始字节，并删除这些工具新建的文件；同一文件即使被多次编辑，也会回到第一次修改之前。如果文件在 Agent 最后一次写入后又被外部修改，普通撤销会将其保留并报告冲突；只有显式执行 `/undo force` 才会覆盖。撤销历史在 `/reset` 后仍保留，但不会跨进程或随恢复会话持久化。`bash` 产生的任意文件系统副作用无法可靠追踪，不在撤销保证范围内。
+
+### 多层安全审查
+
+启用 `Guard` 后，每次 Tool 调用依次经过：不可覆盖的内置硬边界、Tool 的读写范围/网络能力/副作用/基线风险声明自检、确定性风险下限、可选语义/AI 风险复核、人工确认、频率限制和 JSONL 审计。AI 复核只能提升级别，不能降低确定性规则的结论。确认界面会展示命令或目标、能力范围、副作用、风险等级、网络目标以及上传、重定向和凭证标记；高风险发布、远端写入、基础设施变更和不可逆恢复只能单次确认，非交互环境默认拒绝。`a/always` 只对普通权限提示开放，产生的 allow 规则仅存在于当前进程；显式 `/permit` 才会持久化普通策略。规则具有稳定的 `usr-...`、`ses-...`、`prj-...` 和 `sys-...` ID；`/revoke` 只能删除用户或会话规则，项目规则与内置硬边界不可从 CLI 删除。每次 CLI 权限变更都会进入审计。`/security explain` 可以在不执行、不弹确认、不写入决策审计且不消耗频率配额的情况下预览最终规则、能力、风险和网络判断。
+
+所有可读取外部文本的 Tool 输出都会携带 `[UNTRUSTED_TOOL_OUTPUT ...]` 来源标记。Guard 会先脱敏，再检测指令覆盖、伪造角色、凭证诱导和嵌入式工具调用；命中时添加 `[SECURITY_FINDINGS]`，但把原内容继续作为证据而不是指令。同一回合后续有副作用的调用会被污染传播机制提升为必须人工确认，来源和风险标记也会在上下文压缩后保留。审计日志位于 `~/.corecoder/audit`，记录规则来源、能力范围、风险等级、确认结果、不含任意载荷原值的参数摘要和参数摘要哈希。使用 `/audit allow|deny|flag|policy|confirmed [1-100] [tool=<名称>]` 可以筛选当天记录；损坏行会被报告并跳过，不会遮蔽其余有效审计历史。
+
+文件写入会拒绝系统目录、凭据目录、真实 `.env` 和私钥目标，包括尚不存在的凭据目录。网络出口默认采用 `confirm` 模式：云元数据和链路本地地址硬拒绝，私网、未知域名、重定向、携带认证信息及远端写入要求确认。可用 `CORECODER_NETWORK_MODE=deny` 拒绝非 allowlist 目标，并通过逗号分隔的 `CORECODER_NETWORK_ALLOWLIST=api.example.com,*.pythonhosted.org` 配置精确域名或子域通配符；私网和元数据地址不能加入 allowlist。
+
+设置 `CORECODER_SANDBOX=1` 后，如果 Docker 不可用则拒绝 Bash 调用，不会静默降级到宿主机执行。容器网络默认为 `CORECODER_SANDBOX_NETWORK=none`；只有显式设置为 `bridge` 才开放容器网络。命令预检无法防御 DNS rebinding 或任意代码在运行时自行联网，生产环境仍应使用容器网络策略、出口代理或主机防火墙实施强制控制。
+
+集成真实 AI 分类器时，向 `Guard(risk_reviewer=...)` 传入同步回调，返回 `RiskAssessment`。分类器超时或异常时，有副作用的调用会提升为高风险并要求确认；不要让分类器直接执行工具或修改权限。
 
 每个完整回合结束后，CoreCoder 会先快速写入持久化 pending 检查点，再由后台 worker 提取稳定的用户偏好、用户画像、项目约定、历史反馈、经过验证的程序性经验和有价值的任务情景，并保存到 `~/.corecoder/memory`。尚未处理的连续回合会合并，基于 checkpoint token 的确认机制保证旧提取任务不会误删更新的聊天。启动恢复也在后台运行，正常退出不再等待模型请求；未完成的工作会留在 pending，供后续运行继续处理。此后每轮用户输入都会按当前问题和项目范围重新检索活跃记忆，使用次数与成功/失败反馈会参与后续排序；检索也会搜索用户原始 evidence，因此中文请求被总结成英文后仍能用中文召回。`/memory` 会显示 pending 的重试次数和最近提取错误，连续失败三次后进入隔离区。记忆支持证据、版本、候选/活跃/归档/替换状态、自动重建的 `MEMORY.md` 以及跨进程更新锁。
 

@@ -17,6 +17,8 @@ class GlobTool(Tool):
     output_type = "file_paths"
     permission_scope = "filesystem:read"
     side_effect = "none"
+    network_access = "none"
+    declared_risk = "low"
     description = (
         "Find files matching a glob pattern. "
         "Supports ** for recursive matching (e.g. '**/*.py')."

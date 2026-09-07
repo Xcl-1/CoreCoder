@@ -3,6 +3,7 @@
 import json
 import os
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -161,8 +162,51 @@ def test_manager_remove_user_rule(tmp_path, monkeypatch):
     assert any(r.pattern == "test1" for r in pm.list_rules())
 
 
-def test_manager_user_rules_highest_priority():
-    """User rules should override builtins."""
+def test_permission_rule_ids_are_stable_across_reload(tmp_path, monkeypatch):
+    permissions_file = tmp_path / "permissions.json"
+    monkeypatch.setattr("corecoder.security.permissions.USER_PERMISSIONS_PATH", permissions_file)
+    monkeypatch.setattr(
+        "corecoder.security.permissions.PROJECT_PERMISSIONS_PATH",
+        tmp_path / "project-permissions.json",
+    )
+    manager = PermissionManager()
+    rule = PermissionRule("bash", r"^pytest", "allow", "tests", 100, "user")
+    manager.add_user_rule(rule)
+
+    reloaded = PermissionManager()
+
+    assert reloaded.list_rules("user")[0].rule_id == rule.rule_id
+    assert rule.rule_id.startswith("usr-")
+
+
+def test_revoke_and_clear_only_mutable_permission_sources(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "corecoder.security.permissions.USER_PERMISSIONS_PATH",
+        tmp_path / "user-permissions.json",
+    )
+    monkeypatch.setattr(
+        "corecoder.security.permissions.PROJECT_PERMISSIONS_PATH",
+        tmp_path / "project-permissions.json",
+    )
+    manager = PermissionManager()
+    user_rule = PermissionRule("bash", "user-command", "allow", priority=100)
+    session_rule = PermissionRule("bash", "session-command", "allow", priority=100)
+    manager.add_session_rule(session_rule)
+    manager._user_rules = [user_rule]
+    user_rule.source = "user"
+    manager._all_sorted = None
+    builtin = manager.list_rules("builtin")[0]
+
+    assert manager.revoke_rule(builtin.rule_id) is None
+    assert manager.find_rule(builtin.rule_id) is builtin
+    assert manager.revoke_rule(user_rule.rule_id) is user_rule
+    assert manager.find_rule(user_rule.rule_id) is None
+    assert manager.clear_session_rules() == [session_rule]
+    assert manager.list_rules("session") == []
+
+
+def test_manager_user_rules_cannot_override_hard_boundaries():
+    """Configuration may tune policy but cannot bypass platform invariants."""
     pm = PermissionManager()
     pm._user_rules = [
         PermissionRule(tool_name="bash", pattern=r"rm -rf",
@@ -171,7 +215,8 @@ def test_manager_user_rules_highest_priority():
     pm._all_sorted = None
     rule = pm.match("bash", {"command": "rm -rf /"})
     assert rule is not None
-    assert rule.action == "allow"  # user overrides builtin deny
+    assert rule.action == "deny"
+    assert rule.hard_boundary is True
 
 
 def test_manager_reload_clears_cache():
@@ -308,6 +353,21 @@ def test_system_prompt_forbids_unrequested_permission_bypass():
     assert "only when the user explicitly requests it" in prompt
 
 
+def test_system_prompt_gives_windows_native_shell_guidance(monkeypatch):
+    monkeypatch.setattr(
+        "corecoder.prompt.platform.uname",
+        lambda: SimpleNamespace(system="Windows", release="11", machine="AMD64"),
+    )
+
+    prompt = system_prompt([])
+
+    assert "Windows `cmd.exe`" in prompt
+    assert "`dir`" in prompt
+    assert "do not use `/dev/null`" in prompt
+    assert "Guard policy decision" in prompt
+    assert 'Use "Docker sandbox" only' in prompt
+
+
 def test_guard_frequency_throttle():
     g = Guard(max_frequency_window=60.0)
     g.permissions._user_rules = [
@@ -369,6 +429,19 @@ def test_guard_sanitize_nothing_to_redact():
     assert g.sanitize("hello world") == "hello world"
 
 
+def test_guard_sanitizes_command_line_and_url_credentials():
+    guard = Guard()
+
+    sanitized = guard.sanitize(
+        "curl -u alice:raw-secret https://bob:other-secret@example.com/private"
+    )
+
+    assert "raw-secret" not in sanitized
+    assert "other-secret" not in sanitized
+    assert "AUTH_OPTION_REDACTED" in sanitized
+    assert "URL_CREDENTIALS_REDACTED" in sanitized
+
+
 # ============================================================================
 # Audit
 # ============================================================================
@@ -414,6 +487,42 @@ def test_audit_logger_multiple_entries(tmp_path, monkeypatch):
     assert len(lines) == 5
 
 
+def test_audit_query_filters_limits_and_skips_corrupt_lines(tmp_path):
+    audit_dir = tmp_path / "audit"
+    logger = AuditLogger(log_dir=audit_dir)
+    logger.log(AuditEntry(
+        timestamp="2026-01-01T00:00:01",
+        tool_name="read_file",
+        arguments_summary="README.md",
+        decision="allow",
+        rule_source="builtin",
+        reason="safe",
+    ))
+    logger.log(AuditEntry(
+        timestamp="2026-01-01T00:00:02",
+        tool_name="bash",
+        arguments_summary="curl example.com",
+        decision="deny",
+        rule_source="network",
+        reason="blocked",
+        user_confirmed=True,
+        risk_level="high",
+    ))
+    today = time.strftime("%Y-%m-%d")
+    with (audit_dir / f"audit_{today}.jsonl").open("a", encoding="utf-8") as stream:
+        stream.write("{corrupt\n")
+
+    result = logger.query(decisions={"deny"}, tool_name="bash", limit=1)
+
+    assert len(result.entries) == 1
+    assert result.total_entries == 2
+    assert result.total_matches == 1
+    assert result.invalid_lines == 1
+    assert result.decision_counts == {"allow": 1, "deny": 1}
+    assert result.risk_counts == {"none": 1, "high": 1}
+    assert result.confirmed_count == 1
+
+
 def test_audit_logger_rotation(tmp_path, monkeypatch):
     """Old log files should be pruned."""
     audit_dir = tmp_path / "audit"
@@ -451,7 +560,8 @@ def test_builtin_rules_coverage():
 
     # verify dangerous patterns produce deny rules
     deny_rules = [r for r in rules if r.action == "deny"]
-    assert len(deny_rules) == 11  # destructive patterns plus shell control operators
+    assert len(deny_rules) >= 11  # cross-platform destructive patterns plus shell controls
+    assert all(rule.hard_boundary for rule in deny_rules)
 
 
 # ============================================================================

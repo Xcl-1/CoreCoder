@@ -18,6 +18,8 @@ class AgentTool(Tool):
     output_type = "agent_result"
     permission_scope = "agent:delegate"
     side_effect = "delegated"
+    network_access = "delegated"
+    declared_risk = "medium"
     description = (
         "Spawn a sub-agent to handle a complex sub-task independently. "
         "The sub-agent has its own context and tool access. Use this for: "
