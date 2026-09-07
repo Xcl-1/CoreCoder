@@ -27,9 +27,15 @@ class _Choice:
 
 
 class _Usage:
-    def __init__(self, prompt=10, completion=5):
+    def __init__(self, prompt=10, completion=5, cache_hit=None, cache_miss=None, cached_details=None):
         self.prompt_tokens = prompt
         self.completion_tokens = completion
+        if cache_hit is not None:
+            self.prompt_cache_hit_tokens = cache_hit
+        if cache_miss is not None:
+            self.prompt_cache_miss_tokens = cache_miss
+        if cached_details is not None:
+            self.prompt_tokens_details = {"cached_tokens": cached_details}
 
 
 class _Chunk:
@@ -111,6 +117,10 @@ class TestLiteLLMClass:
         llm = LiteLLM(model="x")
         assert llm.total_prompt_tokens == 0
         assert llm.total_completion_tokens == 0
+        assert llm.total_cached_prompt_tokens == 0
+        assert llm.total_cache_miss_prompt_tokens == 0
+        assert llm.cache_usage_requests == 0
+        assert llm.prompt_cache_hit_rate is None
 
 
 def test_openai_compatible_client_is_lazy_and_forked_independently():
@@ -195,6 +205,25 @@ class TestChat:
         assert result.completion_tokens == 5
         assert llm.total_prompt_tokens == 10
         assert llm.total_completion_tokens == 5
+        assert result.cache_usage_available is False
+        assert llm.prompt_cache_hit_rate is None
+
+    def test_tracks_provider_cache_hit_and_miss_usage(self):
+        self.fake.completion.return_value = _make_stream(
+            ["cached"],
+            usage=_Usage(prompt=100, completion=4, cache_hit=75, cache_miss=25),
+        )
+        llm = LiteLLM(model="deepseek/deepseek-v4-flash")
+
+        result = llm.chat(messages=[{"role": "user", "content": "hi"}])
+
+        assert result.cached_prompt_tokens == 75
+        assert result.cache_miss_prompt_tokens == 25
+        assert result.cache_usage_available is True
+        assert llm.total_cached_prompt_tokens == 75
+        assert llm.total_cache_miss_prompt_tokens == 25
+        assert llm.cache_usage_requests == 1
+        assert llm.prompt_cache_hit_rate == pytest.approx(0.75)
 
     def test_on_token_callback(self):
         llm = LiteLLM(model="openai/gpt-4o")
@@ -250,6 +279,28 @@ def test_openai_compatible_chat_preserves_reasoning_and_finish_reason():
     assert result.content == "answer"
     assert result.reasoning_content == "private reasoning"
     assert result.finish_reason == "stop"
+
+
+def test_openai_compatible_chat_tracks_standard_cached_token_details():
+    llm = LLM.__new__(LLM)
+    llm.model = "gpt-test"
+    llm.extra = {}
+    llm.total_prompt_tokens = 0
+    llm.total_completion_tokens = 0
+    llm._call_with_retry = lambda _params: _make_stream(
+        ["answer"],
+        usage=_Usage(prompt=100, completion=5, cached_details=60),
+    )
+
+    result = llm.chat(messages=[{"role": "user", "content": "hi"}])
+
+    assert result.cached_prompt_tokens == 60
+    assert result.cache_miss_prompt_tokens == 40
+    assert result.cache_usage_available is True
+    assert llm.total_cached_prompt_tokens == 60
+    assert llm.total_cache_miss_prompt_tokens == 40
+    assert llm.cache_usage_requests == 1
+    assert llm.prompt_cache_hit_rate == pytest.approx(0.6)
 
 
 # ---------------------------------------------------------------------------

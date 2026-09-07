@@ -33,6 +33,11 @@ ENV_KEYS = [
     "CORECODER_SKILL_AUTO_CONFIDENCE",
     "CORECODER_SKILL_CLARIFY_CONFIDENCE",
     "CORECODER_SKILL_AMBIGUITY_MARGIN",
+    "CORECODER_CONTEXT_ARTIFACTS",
+    "CORECODER_CONTEXT_ARTIFACTS_DIR",
+    "CORECODER_CONTEXT_ARTIFACT_THRESHOLD",
+    "CORECODER_CONTEXT_ARTIFACT_TTL_DAYS",
+    "CORECODER_CONTEXT_ARTIFACT_MAX_MB",
     "CORECODER_TENANT_ID",
     "CORECODER_USER_ID",
     "OPENAI_BASE_URL",
@@ -126,6 +131,26 @@ def test_skills_enabled_parsing(monkeypatch, raw, expected):
     assert Config.from_env().skills_enabled is expected
 
 
+@pytest.mark.parametrize("raw,expected", [("1", True), ("true", True), ("0", False), ("no", False)])
+def test_context_artifacts_enabled_parsing(monkeypatch, raw, expected):
+    monkeypatch.setenv("CORECODER_CONTEXT_ARTIFACTS", raw)
+    assert Config.from_env().context_artifacts_enabled is expected
+
+
+def test_context_artifact_configuration(monkeypatch, tmp_path):
+    monkeypatch.setenv("CORECODER_CONTEXT_ARTIFACTS_DIR", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("CORECODER_CONTEXT_ARTIFACT_THRESHOLD", "24000")
+    monkeypatch.setenv("CORECODER_CONTEXT_ARTIFACT_TTL_DAYS", "14")
+    monkeypatch.setenv("CORECODER_CONTEXT_ARTIFACT_MAX_MB", "512")
+
+    config = Config.from_env()
+
+    assert config.context_artifacts_dir == tmp_path / "artifacts"
+    assert config.context_artifact_threshold == 24_000
+    assert config.context_artifact_ttl_days == 14
+    assert config.context_artifact_max_mb == 512
+
+
 def test_skill_configuration(monkeypatch, tmp_path):
     monkeypatch.setenv("CORECODER_SKILLS_DIR", str(tmp_path / "skills"))
     monkeypatch.setenv("CORECODER_SKILL_TOP_K", "7")
@@ -149,6 +174,7 @@ def test_skill_configuration(monkeypatch, tmp_path):
 def test_tenant_and_user_namespaces_isolate_mutable_data(monkeypatch, tmp_path):
     monkeypatch.setenv("CORECODER_MEMORY_DIR", str(tmp_path / "memory"))
     monkeypatch.setenv("CORECODER_SKILLS_DIR", str(tmp_path / "skills"))
+    monkeypatch.setenv("CORECODER_CONTEXT_ARTIFACTS_DIR", str(tmp_path / "artifacts"))
     monkeypatch.setenv("CORECODER_TENANT_ID", "acme")
     monkeypatch.setenv("CORECODER_USER_ID", "alice@example.com")
 
@@ -157,6 +183,7 @@ def test_tenant_and_user_namespaces_isolate_mutable_data(monkeypatch, tmp_path):
     expected_suffix = Path("tenants") / "acme" / "users" / "alice@example.com"
     assert config.memory_data_dir == tmp_path / "memory" / expected_suffix
     assert config.skills_data_dir == tmp_path / "skills" / expected_suffix
+    assert config.context_artifacts_data_dir == tmp_path / "artifacts" / expected_suffix
 
 
 @pytest.mark.parametrize("value", ["../another-user", "NUL", "ambiguous."])
@@ -279,6 +306,11 @@ def test_memory_dir_default_expands_home(monkeypatch):
         ("CORECODER_SKILL_AUTO_CONFIDENCE", "1.2"),
         ("CORECODER_SKILL_CLARIFY_CONFIDENCE", "-0.1"),
         ("CORECODER_SKILL_AMBIGUITY_MARGIN", "2"),
+        ("CORECODER_CONTEXT_ARTIFACTS", "maybe"),
+        ("CORECODER_CONTEXT_ARTIFACT_THRESHOLD", "invalid"),
+        ("CORECODER_CONTEXT_ARTIFACT_THRESHOLD", "999"),
+        ("CORECODER_CONTEXT_ARTIFACT_TTL_DAYS", "0"),
+        ("CORECODER_CONTEXT_ARTIFACT_MAX_MB", "invalid"),
     ],
 )
 def test_invalid_env_raises(monkeypatch, key, raw):

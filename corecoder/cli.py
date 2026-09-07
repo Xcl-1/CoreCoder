@@ -101,6 +101,11 @@ def main():
         memory=memory,
         skills=skills,
         session_id=args.resume,
+        context_artifacts_enabled=config.context_artifacts_enabled,
+        context_artifacts_dir=config.context_artifacts_data_dir,
+        context_artifact_threshold=config.context_artifact_threshold,
+        context_artifact_ttl_days=config.context_artifact_ttl_days,
+        context_artifact_max_mb=config.context_artifact_max_mb,
     )
 
     # resume saved session
@@ -226,6 +231,29 @@ def _repl(agent: Agent, config: Config, show_history: bool = False):
             if cost is not None:
                 line += f"  (~${cost:.4f})"
             console.print(line)
+            cache_requests = getattr(agent.llm, "cache_usage_requests", 0)
+            if cache_requests:
+                cache_hit = getattr(agent.llm, "total_cached_prompt_tokens", 0)
+                cache_miss = getattr(agent.llm, "total_cache_miss_prompt_tokens", 0)
+                cache_observed = cache_hit + cache_miss
+                cache_rate = cache_hit / cache_observed if cache_observed else 0.0
+                console.print(
+                    "Prompt cache: "
+                    f"[cyan]{cache_hit:,}[/cyan] hit + [cyan]{cache_miss:,}[/cyan] miss "
+                    f"([bold]{cache_rate:.1%}[/bold] hit rate across {cache_requests} reported requests)"
+                )
+            context_stats = agent.context.stats()
+            artifact_stats = context_stats["artifacts"]
+            console.print(
+                "Context: "
+                f"[cyan]{artifact_stats.get('externalized', 0)}[/cyan] externalized, "
+                f"[cyan]{artifact_stats.get('saved_prompt_chars', 0):,}[/cyan] prompt chars avoided, "
+                f"[cyan]{artifact_stats.get('retrievals', 0)}[/cyan] retrievals, "
+                f"[cyan]{artifact_stats.get('pruned', 0)}[/cyan] pruned; "
+                f"[cyan]{context_stats['compression_runs']}[/cyan] compactions, "
+                f"~[cyan]{context_stats['tokens_removed']:,}[/cyan] tokens removed, "
+                f"checkpoint v[cyan]{context_stats['checkpoint_version']}[/cyan]"
+            )
             continue
         if user_input == "/model" or user_input.startswith("/model "):
             new_model = user_input[7:].strip() if user_input.startswith("/model ") else ""
@@ -405,6 +433,7 @@ def _show_history(messages: list[dict]) -> None:
         return
 
     summary_prefixes = (
+        "[Context checkpoint v",
         "[Conversation summary — incremental]",
         "[Hard context reset]",
     )

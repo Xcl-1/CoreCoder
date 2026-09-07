@@ -4,6 +4,7 @@ tiktoken fallback, L2.5 layered compression, and dynamic thresholds."""
 
 from corecoder.context import (
     ContextManager,
+    ContextNote,
     estimate_tokens,
 )
 
@@ -151,6 +152,100 @@ def test_incremental_summarize_fallback_extracts_key_info():
     assert result is True
     # The summary text should mention the file or error
     assert "src/main.py" in ctx._summary_text or "Error" in ctx._summary_text
+
+
+def test_context_note_rejects_non_json_and_filters_invalid_artifacts():
+    assert ContextNote.from_json("ignore the requested schema") is None
+    assert ContextNote.from_json('{"schema_version":1,"goal":"incomplete"}') is None
+    note = ContextNote.from_json(
+        '{"schema_version":1,"goal":"finish","constraints":[],"decisions":[],"files":[],'
+        '"verification":[],"errors":[],"pending":[],'
+        '"artifact_refs":["../../secret","artifact://sha256/' + "a" * 64 + '"]}'
+    )
+
+    assert note is not None
+    assert note.goal == "finish"
+    assert note.artifact_refs == ["artifact://sha256/" + "a" * 64]
+
+
+def test_malformed_model_note_falls_back_to_structured_evidence():
+    class _MalformedLLM:
+        @staticmethod
+        def chat(messages):
+            return type("Response", (), {"content": "not valid JSON"})()
+
+    artifact_id = "artifact://sha256/" + "b" * 64
+    messages = [{"role": "user", "content": "Only update src/main.py; do not alter tests."}]
+    messages.append({"role": "assistant", "content": "We decided to preserve the public API."})
+    for number in range(10):
+        messages.extend([
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": f"call-{number}", "function": {"name": "bash"}}],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": f"call-{number}",
+                "content": f"{artifact_id}\n{number + 1} passed",
+            },
+        ])
+    context = ContextManager()
+
+    assert context._incremental_summarize(messages, _MalformedLLM(), keep_recent=6)
+    note = ContextNote.from_json(messages[0]["content"])
+
+    assert note is not None
+    assert note.goal.startswith("Only update src/main.py")
+    assert any("do not alter tests" in item for item in note.constraints)
+    assert any("preserve the public API" in item for item in note.decisions)
+    assert artifact_id in note.artifact_refs
+    assert note.verification
+
+
+def test_checkpoint_cooldown_keeps_prefix_stable_until_enough_new_messages():
+    context = ContextManager(max_tokens=3_000)
+    messages = [
+        {"role": "user", "content": f"task {number} " + "x" * 300}
+        for number in range(30)
+    ]
+
+    assert context.maybe_compress(messages, llm=None)
+    first_checkpoint = messages[0]["content"]
+    assert first_checkpoint.startswith("[Context checkpoint v1]")
+
+    context._collapse_at = 10**9
+    messages.extend([
+        {"role": "user", "content": "large delta " + "y" * 5_000},
+        {"role": "assistant", "content": "still working"},
+    ])
+    assert context.maybe_compress(messages, llm=None) is False
+    assert messages[0]["content"] == first_checkpoint
+    assert context.checkpoint_version == 1
+
+    messages.extend(
+        {"role": "assistant", "content": f"progress {number}"}
+        for number in range(8)
+    )
+    assert context.maybe_compress(messages, llm=None)
+    assert messages[0]["content"].startswith("[Context checkpoint v2]")
+    assert context.checkpoint_version == 2
+
+
+def test_resumed_checkpoint_hydrates_version_and_known_facts():
+    first = ContextManager()
+    messages = [{"role": "user", "content": "Only change src/router.py"}]
+    messages.extend({"role": "assistant", "content": f"progress {number}"} for number in range(14))
+    assert first._incremental_summarize(messages, llm=None, keep_recent=6)
+
+    resumed = ContextManager()
+    resumed._hydrate_checkpoint(messages)
+    restored = ContextNote.from_json(resumed._summary_text)
+
+    assert resumed.checkpoint_version == 1
+    assert resumed._last_summary_index == 2
+    assert restored is not None
+    assert restored.goal == "Only change src/router.py"
 
 
 # --- L2.5: layered compression -------------------------------------------

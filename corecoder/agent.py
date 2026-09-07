@@ -29,7 +29,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .context import ContextManager, estimate_tokens
+from .context import ContextManager, estimate_request_tokens, estimate_tokens
+from .context_artifacts import ContextArtifactStore
 from .execution import incomplete_answer
 from .llm import LLM
 from .models import PlanRecord, StepRecord, ToolExecRecord
@@ -39,6 +40,7 @@ from .tools import ALL_TOOLS
 from .tools.agent import AgentTool
 from .tools.base import Tool
 from .tools.changes import ChangeTracker, bind_change_tracker, reset_change_tracker
+from .tools.retrieve_context import RetrieveContextTool
 
 if TYPE_CHECKING:
     from .memory import MemoryEngine, MemoryWorker
@@ -114,7 +116,7 @@ def role_prompt(role: AgentRole) -> str:
 def role_tools(role: AgentRole, all_tools: list[Tool]) -> list[Tool]:
     """Filter tools based on role. Reviewer and researcher are read-only."""
     if role in (AgentRole.REVIEWER, AgentRole.RESEARCHER):
-        return [t for t in all_tools if t.name in ("read_file", "grep", "glob")]
+        return [t for t in all_tools if t.name in ("read_file", "grep", "glob", "retrieve_context")]
     if role == AgentRole.PLANNER:
         return []  # planner uses no tools — it just thinks
     return all_tools  # executor gets full access
@@ -137,14 +139,37 @@ class Agent:
         skills: SkillManager | None = None,
         changes: ChangeTracker | None = None,
         session_id: str | None = None,
+        artifact_store: ContextArtifactStore | None = None,
+        context_artifacts_enabled: bool = True,
+        context_artifacts_dir: str | Path | None = None,
+        context_artifact_threshold: int = 12_000,
+        context_artifact_ttl_days: int = 30,
+        context_artifact_max_mb: int = 256,
     ):
         self.llm = llm
-        self.tools = tools if tools is not None else ALL_TOOLS
+        self.session_id = session_id or self._new_session_id()
+        self.context_artifacts = artifact_store
+        if tools is None and self.context_artifacts is None and context_artifacts_enabled:
+            self.context_artifacts = ContextArtifactStore(
+                self.session_id,
+                root=context_artifacts_dir,
+                threshold_chars=context_artifact_threshold,
+                ttl_seconds=context_artifact_ttl_days * 24 * 60 * 60,
+                max_total_bytes=context_artifact_max_mb * 1024 * 1024,
+            )
+        self.tools = list(tools if tools is not None else ALL_TOOLS)
+        if self.context_artifacts is not None and not any(
+            tool.name == "retrieve_context" for tool in self.tools
+        ):
+            self.tools.append(RetrieveContextTool(self.context_artifacts))
         self._tool_by_name = {t.name: t for t in self.tools}
         self.messages: list[dict] = []
         self._turn_messages: list[dict] = []
         self._policy_violations = 0
-        self.context = ContextManager(max_tokens=max_context_tokens)
+        self.context = ContextManager(
+            max_tokens=max_context_tokens,
+            artifact_store=self.context_artifacts,
+        )
         self.max_rounds = max_rounds
         self._system = system_prompt(self.tools)
         self._step_number = 0
@@ -167,8 +192,6 @@ class Agent:
         self._skill_tool_failures = 0
         self._skill_outcome_recorded = False
         self.changes = changes or ChangeTracker()
-        self.session_id = session_id or self._new_session_id()
-
         # replay log — on by default in production, off in tests
         self._replay = ReplayLogger(self.session_id) if replay else None
         if self._replay:
@@ -211,6 +234,24 @@ class Agent:
                 )
             schemas.append(schema)
         return schemas
+
+    def _context_overhead_tokens(self) -> int:
+        """Budget system additions, tool schemas, and reserved model output."""
+        system_message = self._full_messages()[0]
+        configured = getattr(self.llm, "extra", {}).get("max_tokens", 4096)
+        try:
+            output_reserve = int(configured)
+        except (TypeError, ValueError):
+            output_reserve = 4096
+        output_reserve = min(
+            max(256, output_reserve),
+            max(256, self.context.max_tokens // 4),
+        )
+        return estimate_request_tokens(
+            [system_message],
+            tools=self._tool_schemas(),
+            reserve_tokens=output_reserve,
+        )
 
     @staticmethod
     def _finalization_messages(full_msgs: list[dict]) -> list[dict]:
@@ -306,18 +347,20 @@ class Agent:
             answer = route_result.clarification
             self._append_message({"role": "assistant", "content": answer})
             return answer
+        self.context.request_overhead_tokens = self._context_overhead_tokens()
         await asyncio.to_thread(self.context.maybe_compress, self.messages, self.llm)
 
         for _ in range(self.max_rounds):
             self._step_number += 1
             step_start = time.monotonic()
             full_msgs = self._full_messages()
-            est_tokens = estimate_tokens(full_msgs)
+            tool_schemas = self._tool_schemas()
+            est_tokens = estimate_request_tokens(full_msgs, tools=tool_schemas)
 
             resp = await asyncio.to_thread(
                 self.llm.chat,
                 messages=full_msgs,
-                tools=self._tool_schemas(),
+                tools=tool_schemas,
                 on_token=on_token,
             )
 
@@ -382,10 +425,11 @@ class Agent:
                         self._skill_tool_successes += 1
                     else:
                         self._skill_tool_failures += 1
+                    prepared_result = self.context.prepare_tool_result(result, tc.name)
                     self._append_message({
                         "role": "tool",
                         "tool_call_id": tc.id,
-                        "content": result,
+                        "content": prepared_result,
                     })
             except KeyboardInterrupt:
                 # Ctrl+C mid-execution would leave the assistant tool_calls
@@ -398,6 +442,7 @@ class Agent:
                            resp, results, step_start)
 
             # compress if tool outputs are big
+            self.context.request_overhead_tokens = self._context_overhead_tokens()
             await asyncio.to_thread(self.context.maybe_compress, self.messages, self.llm)
 
         self._record_skill_outcome("failure")
@@ -543,7 +588,7 @@ class Agent:
 
         for tc in tool_calls:
             name = tc.name
-            if name in ("read_file", "grep", "glob"):
+            if name in ("read_file", "grep", "glob", "retrieve_context"):
                 readers.append(tc)
             elif name in ("write_file", "edit_file", "edit_ast"):
                 writers.append(tc)
@@ -611,7 +656,8 @@ class Agent:
         self.messages.clear()
         self._turn_messages.clear()
         self._policy_violations = 0
-        self.context = ContextManager(max_tokens=self.context.max_tokens)
+        max_context_tokens = self.context.max_tokens
+        previous_artifact_store = self.context_artifacts
         self._step_number = 0
         self._memory_prompt = ""
         self._memory_context_loaded = False
@@ -625,6 +671,22 @@ class Agent:
         if self.skills is not None:
             self.skills.clear_pins()
         self.session_id = self._new_session_id()
+        if previous_artifact_store is not None:
+            self.context_artifacts = ContextArtifactStore(
+                self.session_id,
+                root=previous_artifact_store.root,
+                threshold_chars=previous_artifact_store.threshold_chars,
+                preview_chars=previous_artifact_store.preview_chars,
+                ttl_seconds=previous_artifact_store.ttl_seconds,
+                max_total_bytes=previous_artifact_store.max_total_bytes,
+            )
+            for tool in self.tools:
+                if isinstance(tool, RetrieveContextTool):
+                    tool.store = self.context_artifacts
+        self.context = ContextManager(
+            max_tokens=max_context_tokens,
+            artifact_store=self.context_artifacts,
+        )
         if self._replay:
             self._replay.close()
             self._replay = ReplayLogger(self.session_id)

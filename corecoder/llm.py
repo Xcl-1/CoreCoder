@@ -19,6 +19,47 @@ from .models import LLMResponse, ToolCall
 logger = logging.getLogger(__name__)
 
 
+def _usage_value(source: Any, name: str) -> Any:
+    """Read usage fields from SDK models or dict-shaped provider responses."""
+    if source is None:
+        return None
+    if isinstance(source, dict):
+        return source.get(name)
+    return getattr(source, name, None)
+
+
+def _token_count(value: Any) -> int | None:
+    """Normalize a provider token count while preserving missing values."""
+    if value is None:
+        return None
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError):
+        return None
+
+
+def _prompt_cache_usage(usage: Any, prompt_tokens: int) -> tuple[int, int, bool]:
+    """Extract prompt-cache hit/miss counts across compatible providers."""
+    hit = _token_count(_usage_value(usage, "prompt_cache_hit_tokens"))
+    miss = _token_count(_usage_value(usage, "prompt_cache_miss_tokens"))
+
+    # OpenAI-compatible SDKs and LiteLLM commonly expose the standardized
+    # cached count under prompt_tokens_details instead of top-level fields.
+    if hit is None:
+        details = _usage_value(usage, "prompt_tokens_details")
+        hit = _token_count(_usage_value(details, "cached_tokens"))
+
+    available = hit is not None or miss is not None
+    if not available:
+        return 0, 0, False
+
+    if hit is None:
+        hit = max(prompt_tokens - (miss or 0), 0)
+    if miss is None:
+        miss = max(prompt_tokens - hit, 0)
+    return hit, miss, True
+
+
 # pricing per million tokens: (input, output)
 # sources: openai.com/api/pricing, api-docs.deepseek.com, platform.claude.com,
 #          platform.moonshot.ai, alibabacloud.com/help/en/model-studio
@@ -68,6 +109,9 @@ class LLM:
         self.extra = kwargs  # temperature, max_tokens, etc.
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
+        self.total_cached_prompt_tokens = 0
+        self.total_cache_miss_prompt_tokens = 0
+        self.cache_usage_requests = 0
 
     def fork(self) -> "LLM":
         """Create an independent provider instance for background work."""
@@ -103,6 +147,34 @@ class LLM:
             self.total_prompt_tokens * input_rate / 1_000_000
             + self.total_completion_tokens * output_rate / 1_000_000
         )
+
+    @property
+    def prompt_cache_hit_rate(self) -> float | None:
+        """Hit ratio for requests whose provider reported cache usage."""
+        if not getattr(self, "cache_usage_requests", 0):
+            return None
+        hit = getattr(self, "total_cached_prompt_tokens", 0)
+        miss = getattr(self, "total_cache_miss_prompt_tokens", 0)
+        observed = hit + miss
+        return hit / observed if observed else None
+
+    def _record_usage(
+        self,
+        prompt_tokens: int,
+        completion_tokens: int,
+        cached_prompt_tokens: int,
+        cache_miss_prompt_tokens: int,
+        cache_usage_available: bool,
+    ) -> None:
+        """Accumulate usage defensively for lightweight test/provider objects."""
+        self.total_prompt_tokens = getattr(self, "total_prompt_tokens", 0) + prompt_tokens
+        self.total_completion_tokens = getattr(self, "total_completion_tokens", 0) + completion_tokens
+        self.total_cached_prompt_tokens = getattr(self, "total_cached_prompt_tokens", 0) + cached_prompt_tokens
+        self.total_cache_miss_prompt_tokens = (
+            getattr(self, "total_cache_miss_prompt_tokens", 0) + cache_miss_prompt_tokens
+        )
+        if cache_usage_available:
+            self.cache_usage_requests = getattr(self, "cache_usage_requests", 0) + 1
 
     def chat(
         self,
@@ -140,6 +212,9 @@ class LLM:
         tc_map: dict[int, dict] = {}  # index -> {id, name, arguments_str}
         prompt_tok = 0
         completion_tok = 0
+        cached_prompt_tok = 0
+        cache_miss_prompt_tok = 0
+        cache_usage_available = False
         finish_reason: str | None = None
 
         for chunk in stream:
@@ -149,6 +224,9 @@ class LLM:
                 # running totals below don't blow up on int + None
                 prompt_tok = chunk.usage.prompt_tokens or 0
                 completion_tok = chunk.usage.completion_tokens or 0
+                cached_prompt_tok, cache_miss_prompt_tok, cache_usage_available = _prompt_cache_usage(
+                    chunk.usage, prompt_tok
+                )
 
             if not chunk.choices:
                 continue
@@ -195,8 +273,13 @@ class LLM:
                 args = {}
             parsed.append(ToolCall(id=raw["id"], name=raw["name"], arguments=args))
 
-        self.total_prompt_tokens += prompt_tok
-        self.total_completion_tokens += completion_tok
+        self._record_usage(
+            prompt_tok,
+            completion_tok,
+            cached_prompt_tok,
+            cache_miss_prompt_tok,
+            cache_usage_available,
+        )
 
         return LLMResponse(
             content="".join(content_parts),
@@ -205,6 +288,9 @@ class LLM:
             finish_reason=finish_reason,
             prompt_tokens=prompt_tok,
             completion_tokens=completion_tok,
+            cached_prompt_tokens=cached_prompt_tok,
+            cache_miss_prompt_tokens=cache_miss_prompt_tok,
+            cache_usage_available=cache_usage_available,
         )
 
     def _prepare_messages(self, messages: list[dict]) -> list[dict]:
@@ -277,6 +363,9 @@ class LiteLLM(LLM):
         self.extra = kwargs
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
+        self.total_cached_prompt_tokens = 0
+        self.total_cache_miss_prompt_tokens = 0
+        self.cache_usage_requests = 0
 
     def chat(
         self,
@@ -304,6 +393,9 @@ class LiteLLM(LLM):
         tc_map: dict[int, dict] = {}
         prompt_tok = 0
         completion_tok = 0
+        cached_prompt_tok = 0
+        cache_miss_prompt_tok = 0
+        cache_usage_available = False
         finish_reason: str | None = None
 
         for chunk in stream:
@@ -311,6 +403,9 @@ class LiteLLM(LLM):
             if usage:
                 prompt_tok = getattr(usage, "prompt_tokens", 0) or 0
                 completion_tok = getattr(usage, "completion_tokens", 0) or 0
+                cached_prompt_tok, cache_miss_prompt_tok, cache_usage_available = _prompt_cache_usage(
+                    usage, prompt_tok
+                )
 
             if not getattr(chunk, "choices", None):
                 continue
@@ -351,8 +446,13 @@ class LiteLLM(LLM):
                 args = {}
             parsed.append(ToolCall(id=raw["id"], name=raw["name"], arguments=args))
 
-        self.total_prompt_tokens += prompt_tok
-        self.total_completion_tokens += completion_tok
+        self._record_usage(
+            prompt_tok,
+            completion_tok,
+            cached_prompt_tok,
+            cache_miss_prompt_tok,
+            cache_usage_available,
+        )
 
         return LLMResponse(
             content="".join(content_parts),
@@ -361,6 +461,9 @@ class LiteLLM(LLM):
             finish_reason=finish_reason,
             prompt_tokens=prompt_tok,
             completion_tokens=completion_tok,
+            cached_prompt_tokens=cached_prompt_tok,
+            cache_miss_prompt_tokens=cache_miss_prompt_tok,
+            cache_usage_available=cache_usage_available,
         )
 
     def _call_with_retry(self, params: dict, max_retries: int = 3):

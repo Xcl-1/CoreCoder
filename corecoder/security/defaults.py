@@ -104,7 +104,7 @@ def builtin_rules():
         ))
 
     # ---- read tools — always allow ----
-    for name in ("read_file", "grep", "glob"):
+    for name in ("read_file", "grep", "glob", "retrieve_context"):
         rules.append(PermissionRule(
             tool_name=name,
             pattern=r".*",

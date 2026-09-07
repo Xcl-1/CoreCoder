@@ -25,6 +25,14 @@ def resolve_skill_dir(value: str | Path | None = None) -> Path:
     return Path(raw).expanduser().resolve()
 
 
+def resolve_context_artifacts_dir(value: str | Path | None = None) -> Path:
+    """Resolve storage for externalized, session-scoped tool observations."""
+    raw = value if value is not None else (
+        os.getenv("CORECODER_CONTEXT_ARTIFACTS_DIR") or "~/.corecoder/context-artifacts"
+    )
+    return Path(raw).expanduser().resolve()
+
+
 def validate_namespace(value: str, field: str) -> str:
     """Validate an externally supplied tenant or user identifier for path use."""
     normalized = value.strip()
@@ -105,6 +113,11 @@ class Config:
     skill_auto_confidence: float = 0.82
     skill_clarify_confidence: float = 0.65
     skill_ambiguity_margin: float = 0.12
+    context_artifacts_enabled: bool = True
+    context_artifacts_dir: Path = Path.home() / ".corecoder" / "context-artifacts"
+    context_artifact_threshold: int = 12_000
+    context_artifact_ttl_days: int = 30
+    context_artifact_max_mb: int = 256
     tenant_id: str = ""
     user_id: str = ""
 
@@ -120,6 +133,14 @@ class Config:
     def skills_data_dir(self) -> Path:
         return scoped_data_dir(
             self.skills_dir,
+            tenant_id=self.tenant_id,
+            user_id=self.user_id,
+        )
+
+    @property
+    def context_artifacts_data_dir(self) -> Path:
+        return scoped_data_dir(
+            self.context_artifacts_dir,
             tenant_id=self.tenant_id,
             user_id=self.user_id,
         )
@@ -149,6 +170,12 @@ class Config:
         skill_auto_confidence_raw = os.getenv("CORECODER_SKILL_AUTO_CONFIDENCE", "0.82")
         skill_clarify_confidence_raw = os.getenv("CORECODER_SKILL_CLARIFY_CONFIDENCE", "0.65")
         skill_ambiguity_margin_raw = os.getenv("CORECODER_SKILL_AMBIGUITY_MARGIN", "0.12")
+        context_artifacts_raw = os.getenv("CORECODER_CONTEXT_ARTIFACTS", "1").strip().lower()
+        context_artifact_threshold_raw = os.getenv(
+            "CORECODER_CONTEXT_ARTIFACT_THRESHOLD", "12000"
+        )
+        context_artifact_ttl_days_raw = os.getenv("CORECODER_CONTEXT_ARTIFACT_TTL_DAYS", "30")
+        context_artifact_max_mb_raw = os.getenv("CORECODER_CONTEXT_ARTIFACT_MAX_MB", "256")
         tenant_id = validate_namespace(os.getenv("CORECODER_TENANT_ID", ""), "CORECODER_TENANT_ID")
         user_id = validate_namespace(os.getenv("CORECODER_USER_ID", ""), "CORECODER_USER_ID")
 
@@ -209,6 +236,38 @@ class Config:
             raise ValueError(
                 f"CORECODER_SKILLS must be a boolean, got: {skills_raw!r}"
             )
+        if context_artifacts_raw not in ("1", "true", "yes", "0", "false", "no"):
+            raise ValueError(
+                "CORECODER_CONTEXT_ARTIFACTS must be a boolean, "
+                f"got: {context_artifacts_raw!r}"
+            )
+        try:
+            context_artifact_threshold = int(context_artifact_threshold_raw)
+        except ValueError as exc:
+            raise ValueError(
+                "CORECODER_CONTEXT_ARTIFACT_THRESHOLD must be an integer, "
+                f"got: {context_artifact_threshold_raw!r}"
+            ) from exc
+        if not (1_000 <= context_artifact_threshold <= 1_000_000):
+            raise ValueError(
+                "CORECODER_CONTEXT_ARTIFACT_THRESHOLD must be 1000-1000000, "
+                f"got: {context_artifact_threshold}"
+            )
+        try:
+            context_artifact_ttl_days = int(context_artifact_ttl_days_raw)
+            context_artifact_max_mb = int(context_artifact_max_mb_raw)
+        except ValueError as exc:
+            raise ValueError("Context artifact TTL and capacity must be integers") from exc
+        if not (1 <= context_artifact_ttl_days <= 3_650):
+            raise ValueError(
+                "CORECODER_CONTEXT_ARTIFACT_TTL_DAYS must be 1-3650, "
+                f"got: {context_artifact_ttl_days}"
+            )
+        if not (1 <= context_artifact_max_mb <= 102_400):
+            raise ValueError(
+                "CORECODER_CONTEXT_ARTIFACT_MAX_MB must be 1-102400, "
+                f"got: {context_artifact_max_mb}"
+            )
         try:
             skill_top_k = int(skill_top_k_raw)
             skill_max_active = int(skill_max_active_raw)
@@ -268,6 +327,11 @@ class Config:
             skill_auto_confidence=skill_auto_confidence,
             skill_clarify_confidence=skill_clarify_confidence,
             skill_ambiguity_margin=skill_ambiguity_margin,
+            context_artifacts_enabled=context_artifacts_raw in ("1", "true", "yes"),
+            context_artifacts_dir=resolve_context_artifacts_dir(),
+            context_artifact_threshold=context_artifact_threshold,
+            context_artifact_ttl_days=context_artifact_ttl_days,
+            context_artifact_max_mb=context_artifact_max_mb,
             tenant_id=tenant_id,
             user_id=user_id,
         )

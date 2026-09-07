@@ -17,7 +17,15 @@ def test_step_record_serialization():
 
 def test_step_record_roundtrip():
     tc = ToolCall(id="c1", name="bash", arguments={"cmd": "ls"})
-    resp = LLMResponse(content="done", tool_calls=[tc], prompt_tokens=10, completion_tokens=3)
+    resp = LLMResponse(
+        content="done",
+        tool_calls=[tc],
+        prompt_tokens=10,
+        completion_tokens=3,
+        cached_prompt_tokens=6,
+        cache_miss_prompt_tokens=4,
+        cache_usage_available=True,
+    )
     record = StepRecord(
         step=3,
         messages_count=12,
@@ -33,6 +41,9 @@ def test_step_record_roundtrip():
     assert restored.step == record.step
     assert restored.llm_response.content == "done"
     assert restored.llm_response.tool_calls[0].name == "bash"
+    assert restored.llm_response.cached_prompt_tokens == 6
+    assert restored.llm_response.cache_miss_prompt_tokens == 4
+    assert restored.llm_response.cache_usage_available is True
     assert len(restored.tool_executions) == 1
     assert restored.tool_executions[0].success is True
 

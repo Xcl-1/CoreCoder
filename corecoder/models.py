@@ -27,6 +27,9 @@ class LLMResponse(BaseModel):
     finish_reason: str | None = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cached_prompt_tokens: int = 0
+    cache_miss_prompt_tokens: int = 0
+    cache_usage_available: bool = False
 
     @property
     def message(self) -> dict:
