@@ -14,7 +14,7 @@ from pathlib import Path
 class FileSnapshot:
     path: Path
     original: bytes | None
-    expected_current: bytes
+    expected_current: bytes | None
     original_mode: int | None = None
     created_dirs: set[Path] = field(default_factory=set)
 
@@ -44,7 +44,7 @@ class ChangeTracker:
         path: Path | str,
         *,
         before: bytes | None,
-        after: bytes,
+        after: bytes | None,
         original_mode: int | None = None,
         created_dirs: set[Path] | None = None,
     ) -> None:
@@ -107,6 +107,38 @@ class ChangeTracker:
         with self._lock:
             self._snapshots.clear()
             self.changed_files.clear()
+
+    def absorb(self, other: ChangeTracker) -> None:
+        """Merge a completed child task's snapshots into this session.
+
+        The first writer's original bytes remain the undo target while later
+        child writes advance ``expected_current`` to the latest known content.
+        Controllers should use worktree isolation before enabling concurrent
+        writers to the same path.
+        """
+        if other is self:
+            return
+        with other._lock:
+            incoming = [
+                FileSnapshot(
+                    path=item.path,
+                    original=item.original,
+                    expected_current=item.expected_current,
+                    original_mode=item.original_mode,
+                    created_dirs=set(item.created_dirs),
+                )
+                for item in other._snapshots.values()
+            ]
+        with self._lock:
+            for snapshot in incoming:
+                key = str(snapshot.path)
+                existing = self._snapshots.get(key)
+                if existing is None:
+                    self._snapshots[key] = snapshot
+                else:
+                    existing.expected_current = snapshot.expected_current
+                    existing.created_dirs.update(snapshot.created_dirs)
+                self.changed_files.add(key)
 
     def __len__(self) -> int:
         return len(self._snapshots)

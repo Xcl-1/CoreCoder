@@ -133,7 +133,103 @@ def chat(self, user_input):
 
 超大工具结果会在第一次进入历史前外置化。对话只保留稳定的摘要预览和 `artifact://sha256/...` 引用；只读工具 `retrieve_context` 可以按关键词或行范围恢复原始证据。达到摘要水位后，旧对话会变成经过 Schema 校验的 JSON 检查点，明确记录当前目标、约束、决策、文件、验证结果、错误、待办和 artifact 引用。检查点带版本号，只有回落到低水位或积累了足量新消息后才允许再次更新，使两次压缩之间的 Prompt Cache 前缀保持稳定。设置 `CORECODER_CONTEXT_ARTIFACTS=0` 可关闭外置存储；`CORECODER_CONTEXT_ARTIFACTS_DIR` 和 `CORECODER_CONTEXT_ARTIFACT_THRESHOLD` 分别控制存储目录与默认 12,000 字符阈值。`CORECODER_CONTEXT_ARTIFACT_TTL_DAYS`（默认 30 天）和 `CORECODER_CONTEXT_ARTIFACT_MAX_MB`（默认 256 MB）限制保留周期与总容量；系统先清理过期项，再按最旧优先释放容量。`/tokens` 会在 Provider 支持时显示 Prompt Cache 命中/未命中用量，并显示外置、检索、清理、压缩和检查点指标。
 
-**约束子 agent 能干什么，靠的是不给它那把工具，而不是写一堆规则求它听话。** 派出去的子 agent 拿到的是隔离的上下文、自己独立的一份历史，工具集只比父 agent 少一样：`agent` 工具本身，于是它没法再往下递归派子 agent。少给一件工具，比事后立一条规矩干净得多。它还复用父 agent 同一个模型连接（花销一并算进总账），输出一过 5000 字就截短、只留开头一段，轮次上限也压得比父 agent 更短。同一套克制，从头贯到尾。
+**子 agent 现在统一运行在主 agent 持有的控制平面之后。** 每次委派都先构造成经过校验的 `TaskSpec`：目标、最小上下文、精确工具白名单、读写根路径、Token 与工具调用预算、超时、角色、工作区模式和验收条件。`TaskController` 统一管理状态机、并发上限、超时和取消。子 agent 使用独立历史，拿不到 `agent` 工具，不能申请权限提升，只能返回有长度边界的 `TaskResult`；完成状态、实际修改文件、用量和越权次数由运行时生成，不接受子 agent 自报。最终复核与验收始终由主 agent 完成。
+
+作为库使用时，可以直接提交协议对象：
+
+```python
+from corecoder import Agent, TaskRole, TaskSpec
+
+spec = TaskSpec(
+    objective="检查认证实现并找出入口",
+    role=TaskRole.RESEARCHER,
+    allowed_tools=("read_file", "grep", "glob"),
+    read_paths=("corecoder/security",),
+    token_budget=8_000,
+    timeout_seconds=120,
+    acceptance_criteria=("引用定义所在的文件",),
+)
+result = await agent.delegate(spec)
+assert result.requires_parent_review
+# 主 agent 独立核验每项条件后：
+# accepted = agent.accept_task(result.task_id, parent_verified_checks)
+```
+
+`agent.tasks.snapshot(task_id)`、`list_tasks()` 和 `events()` 提供有界且不含任务
+Prompt 的控制平面状态查询。任务生命周期事件同时写入现有 JSONL 审计日志，包含任务、
+父子 Agent、角色、权限范围和工作区身份。审计写入失败不会改变任务执行结果，内存中的
+任务历史由 `task_history_limit` 限制容量。
+
+长任务可以在不阻塞调用方的情况下提交：
+
+```python
+task_id = await agent.submit_task(spec)
+snapshot = agent.tasks.snapshot(task_id)
+result = await agent.wait_task(task_id, timeout=30)  # 只限制本次等待
+# agent.cancel_task(task_id)                         # 显式取消后台任务
+
+# 基于游标的进度只包含工具名和控制器里程碑，不包含参数。
+batch = await agent.wait_task_events(task_id, after_sequence=0, timeout=30)
+cursor = batch.next_sequence
+```
+
+等待方自身被取消或等待超时不会终止后台任务；只有控制平面的显式取消或任务自己的截止时间
+会停止执行。
+主模型也可以调用 `agent(background=true)` 获得相同行为，随后使用仅父 Agent 可用的
+`task_control` 工具管理任务。交互式 CLI 提供 `/tasks`、`/task <id>`、
+`/wait-task <id> [seconds]` 和 `/cancel-task <id>`；`/watch-task <id> [seconds]`
+按游标输出实时进度。CLI 在等待终端输入时仍保持事件循环运行，因此后台任务会在两次用户
+命令之间继续执行。进度事件只包含控制器里程碑和工具名，不包含工具参数、模型 Token 或
+思维过程；若客户端游标落后于有界保留范围，返回结果会明确标记 `history_truncated`。
+
+CLI 还会在 `~/.corecoder/tasks` 下维护有界的追加式任务日志；目录按租户和用户隔离，
+文件名由工作区路径摘要生成。同一工作区的新进程可以通过 `/tasks`、`/task` 和
+`/wait-task` 查看此前的终态结果。没有写入终态就退出的任务会被标记为 `interrupted`，
+且绝不会自动重放。日志不保存原始 `TaskSpec.objective` 和上下文，但会保存终态
+`TaskResult` 供主 Agent 复核。设置 `CORECODER_TASK_PERSISTENCE=0` 可关闭持久化，
+`CORECODER_TASK_STATE_DIR` 可修改存储目录。
+
+每个工作区还通过心跳租约保证同一时刻只有一个进程拥有调度和任务日志写入权。第二个进程会
+以只读观察模式打开同一份持久化历史：可以刷新、等待和观察进度，但不能提交或取消子任务。
+`/claim-tasks` 只会显式取得已释放或过期的租约，并在取得所有权后才把真正遗留的任务标记为
+`interrupted`。同一主机上的存活 PID 不会仅因心跳过旧而被抢占；跨主机共享目录可通过
+`CORECODER_TASK_LEASE_STALE_SECONDS` 调整过期阈值（默认 30 秒，最小 5 秒）。
+
+持久执行必须显式开启。只有后台 `TaskSpec` 设置 `durable=True`（或调用
+`agent(background=true, durable=true)`）时，完整任务规格才会在调度前进入经过 Fernet
+认证加密的队列。CLI 取得工作区租约后会恢复有效队列项；正常终态和显式取消会删除队列项，
+崩溃或关闭时未完成的工作则留给下一任所有者。被篡改、密钥不匹配、格式非法或超过容量的
+条目绝不会执行。自动生成的队列密钥保存在租户/用户任务状态目录的 `.task-queue.key` 中，
+并在系统支持时限制文件权限。通过模型工具启用 durable 会要求一次新的用户确认，因为这会
+持久化 objective 和 context；普通任务继续只写不含 Prompt 的日志。
+
+在 Worker 应负责的仓库目录中，可以启动独立的前台消费者：
+
+```bash
+corecoder worker                       # 持续轮询，默认每 1 秒一次
+corecoder worker --poll-interval 0.25 # 自定义有界轮询间隔
+corecoder worker --once               # 清空当前队列后退出
+corecoder worker --workspace ../repo-a --workspace ../repo-b
+corecoder worker --workspace ../repo-a --workspace ../repo-b --workspace-concurrency 2
+```
+
+Worker 与交互式 CLI 复用同一个 Agent、租约、控制器、工具边界、预算、Worktree 合并、
+审计和加密队列。Worker 没有交互确认回调，因此任何需要新增人工批准的操作都会失败关闭；
+durable 任务必须已由提交客户端批准。未取得租约或关闭了任务持久化时，Worker 会以非零状态
+退出。Ctrl+C 会先标记关闭状态再让 asyncio 取消子任务，从而把未完成队列项留给下一任
+Worker。Worker 持有租约期间，另一个 CLI 可以提交显式 durable 任务，但仍不能直接执行或
+取消委派任务。重复传入 `--workspace` 会启动工作池，每个解析后的目录都有独立 Agent、工具
+注册表、控制器、队列和租约。各工作区并发扫描，因此繁忙仓库不会阻塞其他仓库接纳任务。
+租约同时承担跨进程分片：已被另一个存活 Worker 占用的工作区会被跳过，其余工作区继续运行；
+重复路径和不存在的目录会在执行前被拒绝。
+工作池的全局执行上限默认为 4，可通过 `--workspace-concurrency` 设置为 1–32；其下仍会应用
+各工作区控制器自身的并发限制。
+在 `--once` 模式下，两种 Worker 都会分别报告成功与失败任务数；只要存在终态任务失败或
+Worker 内部错误，进程就会返回非零状态。
+
+两种执行后端都走同一套协议。`fork` 在共享目录中执行，默认同一时刻只运行一个子任务；`worktree` 要求主 Git 工作区干净，在受管的 detached worktree 中运行子 agent，收集二进制差异，先由中央执行 `git apply --check`，再应用到主目录并纳入 `/undo`。发生冲突时主目录保持不变，隔离目录会留下供复核。`bash` 和 `undo_changes` 没有可可靠检查的文件路径参数，委派任务默认拒绝；只有库调用方明确选择无路径约束工具时才能开放，而 Worktree 任务始终拒绝它们。
+
+`Agent.run_team()` 和 `agent(mode="coding_team")` 在同一控制器上提供“研究者 → 实现者 → 审查者”分阶段模板，阶段之间只有主 agent 会转交有界摘要。只读任务可以选择最多三次共享总预算的重试；连续失败达到阈值后，控制器会先熔断，停止接纳更多子任务。
 
 每一个「为什么」，下面的文章系列都拆到了具体代码行。
 
@@ -170,7 +266,7 @@ print(Agent(llm=llm).chat("找出项目里所有 TODO 注释并列出来"))
 
 - **bash 的危险命令拦截只是正则黑名单。** 防手滑，不是安全沙箱。要面对不可信输入，就得上 seccomp 或容器隔离。这条最硬，要一路走到系统调用和隔离那一层。
 - **重试只做了指数退避。** 没有 fallback 模型，也没有美元硬预算。顺着 `llm.py` 往下，加一条 fallback 模型链和超预算自动停的闸，改动基本就集中在这一个文件。
-- **子 agent 只有最朴素的同步执行。** 做成异步或流式执行器，正好补上第五篇点名的、相对生产级 agent 流式执行的那段差距。
+- **后台委派仍保持最小实现。** Worktree 隔离、分阶段 Agent Team、有界重试、熔断、基于游标的进度、进程租约、显式加密队列和租约分片的多工作区 Worker 池现在共用一个控制器；更丰富的可选遥测仍是自然的下一处扩展点。
 - **不做 MCP，不做 RAG。** 接上 MCP 让它用上外部工具生态，或给大仓加检索式的代码定位，都是从「最小核心」往「你自己的更强 agent」扩的真实方向。
 
 README 只给方向，每条的代码细节第七篇接着讲。挑一个动手，就是把它做得更好的开始。

@@ -38,6 +38,9 @@ ENV_KEYS = [
     "CORECODER_CONTEXT_ARTIFACT_THRESHOLD",
     "CORECODER_CONTEXT_ARTIFACT_TTL_DAYS",
     "CORECODER_CONTEXT_ARTIFACT_MAX_MB",
+    "CORECODER_TASK_PERSISTENCE",
+    "CORECODER_TASK_STATE_DIR",
+    "CORECODER_TASK_LEASE_STALE_SECONDS",
     "CORECODER_TENANT_ID",
     "CORECODER_USER_ID",
     "CORECODER_NETWORK_MODE",
@@ -139,8 +142,25 @@ def test_context_artifacts_enabled_parsing(monkeypatch, raw, expected):
     assert Config.from_env().context_artifacts_enabled is expected
 
 
+@pytest.mark.parametrize("raw,expected", [("1", True), ("true", True), ("0", False), ("no", False)])
+def test_task_persistence_enabled_parsing(monkeypatch, raw, expected):
+    monkeypatch.setenv("CORECODER_TASK_PERSISTENCE", raw)
+    assert Config.from_env().task_persistence_enabled is expected
+
+
+def test_task_state_directory_configuration(monkeypatch, tmp_path):
+    monkeypatch.setenv("CORECODER_TASK_STATE_DIR", str(tmp_path / "tasks"))
+    assert Config.from_env().task_state_dir == tmp_path / "tasks"
+
+
+def test_task_lease_stale_configuration(monkeypatch):
+    monkeypatch.setenv("CORECODER_TASK_LEASE_STALE_SECONDS", "45.5")
+    assert Config.from_env().task_lease_stale_seconds == 45.5
+
+
 def test_context_artifact_configuration(monkeypatch, tmp_path):
     monkeypatch.setenv("CORECODER_CONTEXT_ARTIFACTS_DIR", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("CORECODER_TASK_STATE_DIR", str(tmp_path / "tasks"))
     monkeypatch.setenv("CORECODER_CONTEXT_ARTIFACT_THRESHOLD", "24000")
     monkeypatch.setenv("CORECODER_CONTEXT_ARTIFACT_TTL_DAYS", "14")
     monkeypatch.setenv("CORECODER_CONTEXT_ARTIFACT_MAX_MB", "512")
@@ -185,6 +205,7 @@ def test_tenant_and_user_namespaces_isolate_mutable_data(monkeypatch, tmp_path):
     monkeypatch.setenv("CORECODER_MEMORY_DIR", str(tmp_path / "memory"))
     monkeypatch.setenv("CORECODER_SKILLS_DIR", str(tmp_path / "skills"))
     monkeypatch.setenv("CORECODER_CONTEXT_ARTIFACTS_DIR", str(tmp_path / "artifacts"))
+    monkeypatch.setenv("CORECODER_TASK_STATE_DIR", str(tmp_path / "tasks"))
     monkeypatch.setenv("CORECODER_TENANT_ID", "acme")
     monkeypatch.setenv("CORECODER_USER_ID", "alice@example.com")
 
@@ -194,6 +215,7 @@ def test_tenant_and_user_namespaces_isolate_mutable_data(monkeypatch, tmp_path):
     assert config.memory_data_dir == tmp_path / "memory" / expected_suffix
     assert config.skills_data_dir == tmp_path / "skills" / expected_suffix
     assert config.context_artifacts_data_dir == tmp_path / "artifacts" / expected_suffix
+    assert config.task_state_data_dir == tmp_path / "tasks" / expected_suffix
 
 
 @pytest.mark.parametrize("value", ["../another-user", "NUL", "ambiguous."])
@@ -321,6 +343,9 @@ def test_memory_dir_default_expands_home(monkeypatch):
         ("CORECODER_CONTEXT_ARTIFACT_THRESHOLD", "999"),
         ("CORECODER_CONTEXT_ARTIFACT_TTL_DAYS", "0"),
         ("CORECODER_CONTEXT_ARTIFACT_MAX_MB", "invalid"),
+        ("CORECODER_TASK_PERSISTENCE", "maybe"),
+        ("CORECODER_TASK_LEASE_STALE_SECONDS", "soon"),
+        ("CORECODER_TASK_LEASE_STALE_SECONDS", "2"),
         ("CORECODER_NETWORK_MODE", "open"),
         ("CORECODER_NETWORK_ALLOWLIST", "https://example.com"),
     ],

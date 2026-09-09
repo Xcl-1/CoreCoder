@@ -17,6 +17,7 @@ from corecoder.memory.reflection import MemoryReflector
 from corecoder.models import LLMResponse, ToolCall
 from corecoder.skills import SkillManager
 from corecoder.skills.evolution import SkillEvolutionEngine
+from corecoder.tools import get_tool
 from corecoder.tools.grep import GrepTool
 from corecoder.tools.read import ReadFileTool
 
@@ -302,6 +303,35 @@ def test_explicit_turn_policy_filters_tools_and_describes_read_scope(tmp_path, m
         "glob",
         {"pattern": "{pytest.ini,setup.cfg,tox.ini,conftest.py}"},
     ) == (tmp_path / "corecoder", tmp_path / "tests")
+
+
+def test_turn_policy_stops_at_new_directive_in_same_sentence():
+    agent = Agent(
+        llm=ScriptedLLM(),
+        tools=[get_tool("agent"), get_tool("edit_file"), get_tool("bash")],
+        replay=False,
+    )
+
+    agent._load_turn_policy(
+        "主 Agent 不得直接修改文件，必须调用 agent 工具；禁止调用 bash、edit_file。"
+    )
+
+    assert "agent" not in agent._turn_forbidden_tools
+    assert agent._turn_forbidden_tools == {"bash", "edit_file"}
+
+
+def test_file_write_scope_is_not_mistaken_for_tool_allowlist():
+    agent = Agent(
+        llm=ScriptedLLM(),
+        tools=[get_tool("read_file"), get_tool("edit_file")],
+        replay=False,
+    )
+
+    agent._load_turn_policy(
+        "只允许修改 state.txt 这一个文件：先用 read_file 检查，再用 edit_file 修改。"
+    )
+
+    assert agent._turn_allowed_tools is None
 
 
 @pytest.mark.asyncio

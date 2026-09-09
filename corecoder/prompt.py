@@ -4,8 +4,13 @@ import os
 import platform
 
 
-def system_prompt(tools, model: str = "") -> str:
-    cwd = os.getcwd()
+def system_prompt(
+    tools,
+    model: str = "",
+    *,
+    working_directory: str | None = None,
+) -> str:
+    cwd = working_directory or os.getcwd()
     tool_list = "\n".join(f"- **{t.name}**: {t.description}" for t in tools)
     uname = platform.uname()
     if uname.system.casefold() == "windows":

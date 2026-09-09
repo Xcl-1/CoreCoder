@@ -181,4 +181,22 @@ def builtin_rules():
         source="builtin",
     ))
 
+    # Read-only task controls are automatic; cancelling delegated work asks.
+    rules.append(PermissionRule(
+        tool_name="task_control",
+        pattern=r"\bcancel\b",
+        action="ask",
+        reason="cancelling a background task may discard unmerged child work",
+        priority=-9,
+        source="builtin",
+    ))
+    rules.append(PermissionRule(
+        tool_name="task_control",
+        pattern=r".*",
+        action="allow",
+        reason="inspect parent-owned delegated task state",
+        priority=-10,
+        source="builtin",
+    ))
+
     return rules

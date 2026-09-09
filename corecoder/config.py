@@ -33,6 +33,14 @@ def resolve_context_artifacts_dir(value: str | Path | None = None) -> Path:
     return Path(raw).expanduser().resolve()
 
 
+def resolve_task_state_dir(value: str | Path | None = None) -> Path:
+    """Resolve durable delegated-task state storage."""
+    raw = value if value is not None else (
+        os.getenv("CORECODER_TASK_STATE_DIR") or "~/.corecoder/tasks"
+    )
+    return Path(raw).expanduser().resolve()
+
+
 def validate_namespace(value: str, field: str) -> str:
     """Validate an externally supplied tenant or user identifier for path use."""
     normalized = value.strip()
@@ -118,6 +126,9 @@ class Config:
     context_artifact_threshold: int = 12_000
     context_artifact_ttl_days: int = 30
     context_artifact_max_mb: int = 256
+    task_persistence_enabled: bool = True
+    task_state_dir: Path = Path.home() / ".corecoder" / "tasks"
+    task_lease_stale_seconds: float = 30.0
     tenant_id: str = ""
     user_id: str = ""
     network_mode: str = "confirm"
@@ -143,6 +154,14 @@ class Config:
     def context_artifacts_data_dir(self) -> Path:
         return scoped_data_dir(
             self.context_artifacts_dir,
+            tenant_id=self.tenant_id,
+            user_id=self.user_id,
+        )
+
+    @property
+    def task_state_data_dir(self) -> Path:
+        return scoped_data_dir(
+            self.task_state_dir,
             tenant_id=self.tenant_id,
             user_id=self.user_id,
         )
@@ -173,6 +192,8 @@ class Config:
         skill_clarify_confidence_raw = os.getenv("CORECODER_SKILL_CLARIFY_CONFIDENCE", "0.65")
         skill_ambiguity_margin_raw = os.getenv("CORECODER_SKILL_AMBIGUITY_MARGIN", "0.12")
         context_artifacts_raw = os.getenv("CORECODER_CONTEXT_ARTIFACTS", "1").strip().lower()
+        task_persistence_raw = os.getenv("CORECODER_TASK_PERSISTENCE", "1").strip().lower()
+        task_lease_stale_raw = os.getenv("CORECODER_TASK_LEASE_STALE_SECONDS", "30")
         context_artifact_threshold_raw = os.getenv(
             "CORECODER_CONTEXT_ARTIFACT_THRESHOLD", "12000"
         )
@@ -253,6 +274,23 @@ class Config:
             raise ValueError(
                 "CORECODER_CONTEXT_ARTIFACTS must be a boolean, "
                 f"got: {context_artifacts_raw!r}"
+            )
+        if task_persistence_raw not in ("1", "true", "yes", "0", "false", "no"):
+            raise ValueError(
+                "CORECODER_TASK_PERSISTENCE must be a boolean, "
+                f"got: {task_persistence_raw!r}"
+            )
+        try:
+            task_lease_stale_seconds = float(task_lease_stale_raw)
+        except ValueError as exc:
+            raise ValueError(
+                "CORECODER_TASK_LEASE_STALE_SECONDS must be a number, "
+                f"got: {task_lease_stale_raw!r}"
+            ) from exc
+        if not 5 <= task_lease_stale_seconds <= 3_600:
+            raise ValueError(
+                "CORECODER_TASK_LEASE_STALE_SECONDS must be 5-3600, "
+                f"got: {task_lease_stale_seconds}"
             )
         try:
             context_artifact_threshold = int(context_artifact_threshold_raw)
@@ -345,6 +383,9 @@ class Config:
             context_artifact_threshold=context_artifact_threshold,
             context_artifact_ttl_days=context_artifact_ttl_days,
             context_artifact_max_mb=context_artifact_max_mb,
+            task_persistence_enabled=task_persistence_raw in ("1", "true", "yes"),
+            task_state_dir=resolve_task_state_dir(),
+            task_lease_stale_seconds=task_lease_stale_seconds,
             tenant_id=tenant_id,
             user_id=user_id,
             network_mode=validated_network.mode,

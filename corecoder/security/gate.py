@@ -138,6 +138,11 @@ class Guard:
     risk_reviewer: RiskReviewer | None = None
     network_policy: NetworkPolicy = field(default_factory=NetworkPolicy)
     max_frequency_window: float = 60.0
+    agent_id: str = ""
+    parent_id: str = ""
+    task_id: str = ""
+    permission_scope: str = ""
+    workspace_mode: str = ""
 
     # per-tool call timestamps for frequency throttle (Layer 3)
     _freq_log: dict[str, list[float]] = field(default_factory=dict, repr=False)
@@ -148,6 +153,39 @@ class Guard:
     def begin_turn(self) -> None:
         """Reset transient content taint at the start of a user turn."""
         self._content_risk_signals.clear()
+
+    def for_delegate(
+        self,
+        *,
+        agent_id: str,
+        parent_id: str,
+        task_id: str,
+        permission_scope: str,
+        workspace_mode: str,
+    ) -> Guard:
+        """Return a non-interactive, no-broader-authority child policy view.
+
+        Permission, network and risk policies are inherited by reference.  The
+        confirmation callback is intentionally removed: a child can report that
+        approval is needed, but only the parent control plane may ask the user.
+        Frequency counters remain shared so delegation cannot evade rate limits.
+        """
+        delegated = Guard(
+            permissions=self.permissions,
+            audit=self.audit,
+            confirm_callback=None,
+            risk_reviewer=self.risk_reviewer,
+            network_policy=self.network_policy,
+            max_frequency_window=self.max_frequency_window,
+            agent_id=agent_id,
+            parent_id=parent_id,
+            task_id=task_id,
+            permission_scope=permission_scope,
+            workspace_mode=workspace_mode,
+        )
+        delegated._freq_log = self._freq_log
+        delegated._content_risk_signals = list(self._content_risk_signals)
+        return delegated
 
     def review(self, tool_name: str, arguments: dict, tool: Any | None = None) -> SecurityDecision:
         """Run the pre-execution review chain and return a decision.
@@ -233,6 +271,10 @@ class Guard:
         confirmation_reasons: list[str] = []
         if _targets_persistent_permissions(tool_name, arguments):
             confirmation_reasons.append("persistent permission changes require explicit user approval")
+        if tool_name == "agent" and arguments.get("durable") is True:
+            confirmation_reasons.append(
+                "durable delegation encrypts and persists the task objective and context"
+            )
         if rule.action == "ask":
             confirmation_reasons.append(rule.reason or "permission rule requires confirmation")
         if risk.level >= RiskLevel.HIGH:
@@ -275,6 +317,7 @@ class Guard:
                 can_remember=(
                     rule.action == "ask"
                     and not _targets_persistent_permissions(tool_name, arguments)
+                    and not (tool_name == "agent" and arguments.get("durable") is True)
                     and risk.level < RiskLevel.HIGH
                     and network.action != "ask"
                     and not self._content_risk_signals
@@ -434,6 +477,11 @@ class Guard:
             decision="policy",
             rule_source="user-action",
             reason=self.sanitize(description),
+            agent_id=self.agent_id,
+            parent_id=self.parent_id,
+            task_id=self.task_id,
+            permission_scope=self.permission_scope,
+            workspace_mode=self.workspace_mode,
         ))
 
     def _invoke_confirmation(
@@ -480,6 +528,11 @@ class Guard:
             declared_risk=capability.declared_risk if capability else "",
             network_policy_action=network.action if network else "",
             network_destinations=list(network.intent.destinations) if network else [],
+            agent_id=self.agent_id,
+            parent_id=self.parent_id,
+            task_id=self.task_id,
+            permission_scope=self.permission_scope,
+            workspace_mode=self.workspace_mode,
         ))
 
     def _check_frequency(self, tool_name: str, max_per_minute: int) -> bool:

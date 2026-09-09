@@ -20,7 +20,7 @@ _MAX_AGE_DAYS = 30
 
 @dataclass
 class AuditEntry:
-    """One auditable tool-call event."""
+    """One auditable tool-call or control-plane event."""
 
     timestamp: str          # ISO-8601
     tool_name: str
@@ -39,6 +39,13 @@ class AuditEntry:
     declared_risk: str = ""
     network_policy_action: str = ""
     network_destinations: list[str] = field(default_factory=list)
+    agent_id: str = ""
+    parent_id: str = ""
+    task_id: str = ""
+    permission_scope: str = ""
+    workspace_mode: str = ""
+    event_type: str = "tool_call"
+    event_sequence: int = 0
 
 
 @dataclass(frozen=True)
@@ -81,6 +88,9 @@ class AuditLogger:
         date: str | None = None,
         decisions: set[str] | None = None,
         tool_name: str | None = None,
+        event_type: str | None = None,
+        task_id: str | None = None,
+        agent_id: str | None = None,
         confirmed_only: bool = False,
         limit: int = 10,
     ) -> AuditQueryResult:
@@ -132,6 +142,9 @@ class AuditLogger:
                 matches = (
                     (decisions is None or decision in decisions)
                     and (tool_name is None or entry.get("tool_name") == tool_name)
+                    and (event_type is None or entry.get("event_type", "tool_call") == event_type)
+                    and (task_id is None or entry.get("task_id") == task_id)
+                    and (agent_id is None or entry.get("agent_id") == agent_id)
                     and (not confirmed_only or entry.get("user_confirmed") is True)
                 )
                 if matches:
@@ -180,4 +193,11 @@ def _entry_to_dict(entry: AuditEntry) -> dict:
         "declared_risk": entry.declared_risk,
         "network_policy_action": entry.network_policy_action,
         "network_destinations": entry.network_destinations,
+        "agent_id": entry.agent_id,
+        "parent_id": entry.parent_id,
+        "task_id": entry.task_id,
+        "permission_scope": entry.permission_scope,
+        "workspace_mode": entry.workspace_mode,
+        "event_type": entry.event_type,
+        "event_sequence": entry.event_sequence,
     }

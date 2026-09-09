@@ -1,5 +1,7 @@
 """Interactive REPL - the user-facing terminal interface."""
 
+from __future__ import annotations
+
 import argparse
 import asyncio
 import json
@@ -7,6 +9,10 @@ import logging
 import os
 import re
 import sys
+import threading
+import time
+from pathlib import Path
+from typing import Self
 
 from prompt_toolkit import prompt as pt_prompt
 from prompt_toolkit.history import FileHistory
@@ -24,9 +30,90 @@ from .memory import MemoryEngine, MemoryWorker
 from .security import ConfirmationContext, Guard, NetworkPolicy, PermissionRule
 from .session import list_sessions, load_session, save_session
 from .skills import SkillManager
+from .worker import DurableTaskWorker, DurableTaskWorkerPool
 
 console = Console()
 logger = logging.getLogger(__name__)
+
+
+class _AsyncLoopRunner:
+    """Keep one asyncio loop alive while the synchronous terminal waits for input."""
+
+    def __init__(self):
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(
+            target=self._serve,
+            name="corecoder-cli-async",
+            daemon=True,
+        )
+
+    def _serve(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        try:
+            self._loop.run_forever()
+        finally:
+            self._loop.run_until_complete(self._loop.shutdown_asyncgens())
+            self._loop.run_until_complete(self._loop.shutdown_default_executor())
+            self._loop.close()
+
+    def __enter__(self) -> Self:
+        self._thread.start()
+        return self
+
+    def run(self, coroutine):
+        future = asyncio.run_coroutine_threadsafe(coroutine, self._loop)
+        try:
+            return future.result()
+        except BaseException:
+            future.cancel()
+            raise
+
+    def __exit__(self, *_exc_info) -> None:
+        async def cancel_pending() -> None:
+            current = asyncio.current_task()
+            pending = [task for task in asyncio.all_tasks() if task is not current]
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+
+        if self._loop.is_running():
+            asyncio.run_coroutine_threadsafe(cancel_pending(), self._loop).result()
+            self._loop.call_soon_threadsafe(self._loop.stop)
+        self._thread.join()
+
+
+def _worker_poll_interval(value: str) -> float:
+    try:
+        interval = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("poll interval must be a number") from exc
+    if not 0.05 <= interval <= 300:
+        raise argparse.ArgumentTypeError("poll interval must be between 0.05 and 300 seconds")
+    return interval
+
+
+def _worker_concurrency(value: str) -> int:
+    try:
+        concurrency = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("worker concurrency must be an integer") from exc
+    if not 1 <= concurrency <= 32:
+        raise argparse.ArgumentTypeError("worker concurrency must be between 1 and 32")
+    return concurrency
+
+
+def _resolve_worker_workspaces(values: list[str]) -> tuple[Path, ...]:
+    roots = tuple(Path(value).expanduser().resolve() for value in values) or (
+        Path.cwd().resolve(),
+    )
+    invalid = [str(path) for path in roots if not path.is_dir()]
+    if invalid:
+        raise ValueError("Worker workspace is not an existing directory: " + ", ".join(invalid))
+    identities = [os.path.normcase(str(path)) for path in roots]
+    if len(set(identities)) != len(identities):
+        raise ValueError("Worker workspace paths must be unique")
+    return roots
 
 
 def _parse_args():
@@ -34,11 +121,39 @@ def _parse_args():
         prog="corecoder",
         description="Minimal AI coding agent. Works with any OpenAI-compatible LLM.",
     )
+    p.add_argument(
+        "command",
+        nargs="?",
+        choices=("chat", "worker"),
+        default="chat",
+        help="Run the interactive agent (default) or the durable task worker.",
+    )
     p.add_argument("-m", "--model", help="Model name (default: $CORECODER_MODEL or gpt-5.5)")
     p.add_argument("--base-url", help="API base URL (default: $OPENAI_BASE_URL)")
     p.add_argument("--api-key", help="API key (default: $OPENAI_API_KEY)")
     p.add_argument("-p", "--prompt", help="One-shot prompt (non-interactive mode)")
     p.add_argument("-r", "--resume", metavar="ID", help="Resume a saved session")
+    p.add_argument("--once", action="store_true", help="Worker: drain current queue and exit")
+    p.add_argument(
+        "--workspace",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="Worker: workspace to serve; repeat for a pool (default: current directory)",
+    )
+    p.add_argument(
+        "--poll-interval",
+        type=_worker_poll_interval,
+        default=1.0,
+        help="Worker queue scan interval in seconds (default: 1)",
+    )
+    p.add_argument(
+        "--workspace-concurrency",
+        type=_worker_concurrency,
+        default=4,
+        metavar="N",
+        help="Worker pool: maximum tasks executing across workspaces (default: 4)",
+    )
     p.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
     return p.parse_args()
 
@@ -56,6 +171,13 @@ def main():
 
     args = _parse_args()
     config = Config.from_env()
+    worker_mode = args.command == "worker"
+    if worker_mode and (args.prompt or args.resume):
+        console.print("[red]Worker mode cannot use --prompt or --resume.[/red]")
+        sys.exit(2)
+    if not worker_mode and (args.once or args.workspace):
+        console.print("[red]--once and --workspace are available only in worker mode.[/red]")
+        sys.exit(2)
 
     # CLI args override env vars
     if args.model:
@@ -92,12 +214,21 @@ def main():
 
     # security layer — interactive confirmation callback
     guard = Guard(
-        confirm_callback=_cli_confirm,
+        confirm_callback=None if worker_mode else _cli_confirm,
         network_policy=NetworkPolicy(config.network_mode, config.network_allowlist),
     )
-    _cli_confirm._guard = guard  # enable "always allow" via callback attribute
-    memory = _create_memory_engine(config, llm)
-    skills = _create_skill_manager(config)
+    if not worker_mode:
+        _cli_confirm._guard = guard  # enable "always allow" via callback attribute
+    memory = None if worker_mode else _create_memory_engine(config, llm)
+    skills = None if worker_mode else _create_skill_manager(config)
+    workspace_roots = (Path.cwd().resolve(),)
+    if worker_mode:
+        try:
+            workspace_roots = _resolve_worker_workspaces(args.workspace)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            sys.exit(2)
+
     agent = Agent(
         llm=llm,
         max_context_tokens=config.max_context_tokens,
@@ -110,7 +241,43 @@ def main():
         context_artifact_threshold=config.context_artifact_threshold,
         context_artifact_ttl_days=config.context_artifact_ttl_days,
         context_artifact_max_mb=config.context_artifact_max_mb,
+        task_state_dir=(config.task_state_data_dir if config.task_persistence_enabled else None),
+        task_lease_stale_seconds=config.task_lease_stale_seconds,
+        workspace_root=workspace_roots[0],
     )
+
+    if worker_mode:
+        agents = [agent]
+        for workspace_root in workspace_roots[1:]:
+            workspace_llm = llm.fork()
+            workspace_guard = Guard(
+                confirm_callback=None,
+                network_policy=NetworkPolicy(config.network_mode, config.network_allowlist),
+            )
+            agents.append(Agent(
+                llm=workspace_llm,
+                max_context_tokens=config.max_context_tokens,
+                guard=workspace_guard,
+                context_artifacts_enabled=config.context_artifacts_enabled,
+                context_artifacts_dir=config.context_artifacts_data_dir,
+                context_artifact_threshold=config.context_artifact_threshold,
+                context_artifact_ttl_days=config.context_artifact_ttl_days,
+                context_artifact_max_mb=config.context_artifact_max_mb,
+                task_state_dir=(
+                    config.task_state_data_dir if config.task_persistence_enabled else None
+                ),
+                task_lease_stale_seconds=config.task_lease_stale_seconds,
+                workspace_root=workspace_root,
+            ))
+        worker_status = _run_workers(
+            agents,
+            once=args.once,
+            poll_interval=args.poll_interval,
+            max_concurrency=args.workspace_concurrency,
+        )
+        if worker_status:
+            sys.exit(worker_status)
+        return
 
     # resume saved session
     if args.resume:
@@ -162,7 +329,100 @@ def _run_once(agent: Agent, prompt: str):
     print()
 
 
+def _run_worker(agent: Agent, *, once: bool, poll_interval: float) -> int:
+    """Run the encrypted queue consumer in the foreground."""
+    worker = DurableTaskWorker(agent, poll_interval=poll_interval)
+    if not agent.durable_task_queue_enabled:
+        console.print("[red]Durable task persistence is disabled.[/red]")
+        agent.close()
+        return 2
+    owner = agent.task_scheduler_owner
+    if not agent.owns_task_scheduler:
+        detail = f" process {owner.process_id} on {owner.hostname}" if owner else " another process"
+        console.print(f"[red]Task scheduler lease is owned by{detail}.[/red]")
+        agent.close()
+        return 2
+    console.print(
+        f"[bold]CoreCoder durable worker[/bold] workspace=[cyan]{agent.workspace_root}[/cyan]"
+    )
+    stats = None
+    try:
+        stats = asyncio.run(worker.run(once=once))
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Worker stopping; unfinished durable tasks remain queued.[/yellow]")
+        return 130
+    finally:
+        agent.close()
+    if once and stats is not None:
+        style = "yellow" if stats.failed else "green"
+        console.print(
+            f"[{style}]Queue drain complete: {stats.scheduled} scheduled, "
+            f"{stats.completed} finished ({stats.succeeded} succeeded, "
+            f"{stats.failed} failed).[/{style}]"
+        )
+        return 1 if stats.failed else 0
+    return 0
+
+
+def _run_workers(
+    agents: list[Agent],
+    *,
+    once: bool,
+    poll_interval: float,
+    max_concurrency: int,
+) -> int:
+    """Run one worker or a lease-sharded multi-workspace pool."""
+    if len(agents) == 1:
+        return _run_worker(agents[0], once=once, poll_interval=poll_interval)
+
+    pool = DurableTaskWorkerPool(
+        agents,
+        poll_interval=poll_interval,
+        max_concurrency=max_concurrency,
+    )
+    claimed = sum(agent.owns_task_scheduler for agent in agents)
+    console.print(
+        f"[bold]CoreCoder durable worker pool[/bold] "
+        f"workspaces=[cyan]{len(agents)}[/cyan] claimed=[cyan]{claimed}[/cyan]"
+    )
+    stats = None
+    try:
+        stats = asyncio.run(pool.run(once=once))
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return 2
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Worker pool stopping; unfinished durable tasks remain queued.[/yellow]")
+        return 130
+    finally:
+        for agent in agents:
+            agent.close()
+    if once and stats is not None:
+        style = "yellow" if stats.failed or stats.errors else "green"
+        console.print(
+            f"[{style}]Pool drain complete: {stats.scheduled} scheduled, "
+            f"{stats.completed} finished ({stats.succeeded} succeeded, "
+            f"{stats.failed} failed), {stats.errors} worker errors; "
+            f"{stats.claimed_workspaces} claimed, "
+            f"{stats.skipped_workspaces} skipped.[/{style}]"
+        )
+        return 1 if stats.failed or stats.errors else 0
+    return 0
+
+
 def _repl(agent: Agent, config: Config, show_history: bool = False):
+    """Run the interactive shell on one persistent asynchronous event loop."""
+    with _AsyncLoopRunner() as runner:
+        _repl_loop(agent, config, runner, show_history=show_history)
+
+
+def _repl_loop(
+    agent: Agent,
+    config: Config,
+    runner: _AsyncLoopRunner,
+    *,
+    show_history: bool = False,
+):
     """Interactive read-eval-print loop."""
     replay_info = ""
     if agent._replay:
@@ -196,6 +456,11 @@ def _repl(agent: Agent, config: Config, show_history: bool = False):
 
     # Only begin recovery after the interface and resumed history are visible.
     # A stale checkpoint may need model requests, but never blocks startup.
+    recovered_tasks = runner.run(agent.recover_durable_tasks())
+    if recovered_tasks:
+        console.print(
+            f"[green]Recovered {len(recovered_tasks)} encrypted durable task(s).[/green]"
+        )
     memory_worker = getattr(agent, "memory_worker", None)
     if memory_worker is not None:
         memory_worker.start(recover_existing=True)
@@ -298,6 +563,24 @@ def _repl(agent: Agent, config: Config, show_history: bool = False):
         if user_input in ("/undo", "/undo force"):
             _undo_changes(agent, force=user_input.endswith(" force"))
             continue
+        if user_input == "/tasks":
+            _show_tasks(agent, runner)
+            continue
+        if user_input == "/claim-tasks":
+            _claim_task_scheduler(agent, runner)
+            continue
+        if user_input.startswith("/task "):
+            _show_task(agent, user_input[len("/task "):].strip(), runner)
+            continue
+        if user_input.startswith("/cancel-task "):
+            _cancel_task(agent, user_input[len("/cancel-task "):].strip(), runner)
+            continue
+        if user_input.startswith("/wait-task "):
+            _wait_task(agent, user_input[len("/wait-task "):].strip(), runner)
+            continue
+        if user_input.startswith("/watch-task "):
+            _watch_task(agent, user_input[len("/watch-task "):].strip(), runner)
+            continue
         if user_input == "/replay":
             if agent._replay:
                 console.print(f"Replay log: [cyan]{agent._replay.path}[/cyan]")
@@ -310,7 +593,7 @@ def _repl(agent: Agent, config: Config, show_history: bool = False):
             if not task:
                 console.print("[yellow]Usage: /plan <task description>[/yellow]")
                 continue
-            asyncio.run(_do_plan(agent, task))
+            runner.run(_do_plan(agent, task))
             continue
         if user_input == "/sessions":
             sessions = list_sessions()
@@ -423,7 +706,7 @@ def _repl(agent: Agent, config: Config, show_history: bool = False):
             console.print(f"\n[dim]> {name}({_brief(kwargs)})[/dim]")
 
         try:
-            response = asyncio.run(agent.chat(user_input, on_token=on_token, on_tool=on_tool))
+            response = runner.run(agent.chat(user_input, on_token=on_token, on_tool=on_tool))
             if streamed:
                 print()  # newline after streamed tokens
             else:
@@ -438,7 +721,218 @@ def _repl(agent: Agent, config: Config, show_history: bool = False):
             _save_current_session(agent, config)
 
     _save_current_session(agent, config)
-    agent.close()
+    _run_on_cli_loop(runner, agent.close)
+
+
+def _run_on_cli_loop(runner: _AsyncLoopRunner | None, callback):
+    """Run controller access on its owning loop when called by the CLI thread."""
+    if runner is None:
+        return callback()
+
+    async def invoke():
+        return callback()
+
+    return runner.run(invoke())
+
+
+def _show_tasks(agent: Agent, runner: _AsyncLoopRunner | None = None) -> None:
+    """Render recent task snapshots without exposing delegated prompt text."""
+    from rich.table import Table
+
+    def load_snapshots():
+        agent.refresh_task_state()
+        return agent.tasks.list_tasks(limit=50)
+
+    snapshots = _run_on_cli_loop(runner, load_snapshots)
+    if not snapshots:
+        console.print("[dim]No delegated tasks in this session.[/dim]")
+        return
+    table = Table(title=f"Delegated Tasks ({len(snapshots)})", border_style="blue")
+    table.add_column("Task ID", style="cyan")
+    table.add_column("Status")
+    table.add_column("Role")
+    table.add_column("Workspace")
+    table.add_column("Attempts", justify="right")
+    table.add_column("Tokens", justify="right")
+    for item in snapshots:
+        status_style = "green" if item.status.value == "completed" else "yellow"
+        table.add_row(
+            item.task_id,
+            f"[{status_style}]{item.status.value}[/{status_style}]",
+            item.role.value,
+            item.execution_mode.value,
+            str(item.attempts),
+            str(item.usage.prompt_tokens + item.usage.completion_tokens),
+        )
+    console.print(table)
+
+
+def _show_task(
+    agent: Agent,
+    task_id: str,
+    runner: _AsyncLoopRunner | None = None,
+) -> None:
+    """Render one task's trusted state and available bounded result."""
+    from rich.table import Table
+
+    if not task_id:
+        console.print("[yellow]Usage: /task <id>[/yellow]")
+        return
+    def load_task():
+        agent.refresh_task_state()
+        return agent.tasks.snapshot(task_id), agent.tasks.result(task_id)
+
+    snapshot, result = _run_on_cli_loop(runner, load_task)
+    if snapshot is None:
+        console.print(f"[yellow]Task not found: {task_id}[/yellow]")
+        return
+    table = Table(title=f"Task {task_id}", show_header=False, border_style="blue")
+    table.add_column("Field", style="bold")
+    table.add_column("Value")
+    table.add_row("Status", snapshot.status.value)
+    table.add_row("Agent", snapshot.agent_id)
+    table.add_row("Parent", snapshot.parent_id)
+    table.add_row("Role", snapshot.role.value)
+    table.add_row("Workspace", snapshot.execution_mode.value)
+    table.add_row("Attempts", str(snapshot.attempts))
+    table.add_row(
+        "Usage",
+        f"{snapshot.usage.prompt_tokens + snapshot.usage.completion_tokens} tokens, "
+        f"{snapshot.usage.tool_calls} tool calls, {snapshot.usage.duration_ms:.0f} ms",
+    )
+    table.add_row("Accepted", "yes" if snapshot.accepted else "no")
+    if snapshot.error:
+        table.add_row("Error", Text(snapshot.error))
+    console.print(table)
+    if result is not None and result.summary:
+        console.print(Panel(Text(result.summary), title="Task summary", border_style="dim"))
+
+
+def _cancel_task(
+    agent: Agent,
+    task_id: str,
+    runner: _AsyncLoopRunner | None = None,
+) -> None:
+    """Handle an explicit user cancellation command."""
+    if not task_id:
+        console.print("[yellow]Usage: /cancel-task <id>[/yellow]")
+        return
+    def cancel():
+        agent.refresh_task_state()
+        return agent.cancel_task(task_id), agent.tasks.snapshot(task_id) is not None
+
+    cancelled, exists = _run_on_cli_loop(runner, cancel)
+    if cancelled:
+        console.print(f"[yellow]Cancellation requested: {task_id}[/yellow]")
+    elif not exists:
+        console.print(f"[yellow]Task not found: {task_id}[/yellow]")
+    else:
+        console.print(f"[dim]Task is no longer running: {task_id}[/dim]")
+
+
+def _wait_task(agent: Agent, arguments: str, runner: _AsyncLoopRunner) -> None:
+    """Wait from the CLI while keeping ownership in the task controller."""
+    parts = arguments.split()
+    if not 1 <= len(parts) <= 2:
+        console.print("[yellow]Usage: /wait-task <id> [seconds][/yellow]")
+        return
+    timeout = 30.0
+    if len(parts) == 2:
+        try:
+            timeout = float(parts[1])
+        except ValueError:
+            console.print("[yellow]Wait timeout must be a positive number.[/yellow]")
+            return
+    try:
+        runner.run(agent.wait_task(parts[0], timeout=timeout))
+    except TimeoutError:
+        console.print(
+            f"[yellow]Wait timed out after {timeout:g}s; task is still running.[/yellow]"
+        )
+        return
+    except (KeyError, ValueError, RuntimeError) as exc:
+        console.print(f"[yellow]Cannot wait for task: {exc}[/yellow]")
+        return
+    _show_task(agent, parts[0], runner)
+
+
+def _watch_task(agent: Agent, arguments: str, runner: _AsyncLoopRunner) -> None:
+    """Stream bounded, non-sensitive task progress until terminal or timeout."""
+    parts = arguments.split()
+    if not 1 <= len(parts) <= 2:
+        console.print("[yellow]Usage: /watch-task <id> [seconds][/yellow]")
+        return
+    timeout = 30.0
+    if len(parts) == 2:
+        try:
+            timeout = float(parts[1])
+        except ValueError:
+            console.print("[yellow]Watch timeout must be a positive number.[/yellow]")
+            return
+    if not 0 < timeout <= 300:
+        console.print("[yellow]Watch timeout must be between 0 and 300 seconds.[/yellow]")
+        return
+    task_id = parts[0]
+    def load_snapshot():
+        agent.refresh_task_state()
+        return agent.tasks.snapshot(task_id)
+
+    snapshot = _run_on_cli_loop(runner, load_snapshot)
+    if snapshot is None:
+        console.print(f"[yellow]Task not found: {task_id}[/yellow]")
+        return
+
+    cursor = 0
+    deadline = time.monotonic() + timeout
+    warned_truncation = False
+    console.print(f"[bold]Watching task [cyan]{task_id}[/cyan][/bold]")
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            console.print(f"[yellow]Watch timed out after {timeout:g}s.[/yellow]")
+            return
+        try:
+            batch = runner.run(agent.wait_task_events(
+                task_id,
+                after_sequence=cursor,
+                timeout=remaining,
+                limit=100,
+            ))
+        except (KeyError, ValueError, RuntimeError) as exc:
+            console.print(f"[yellow]Cannot watch task: {exc}[/yellow]")
+            return
+        if batch.history_truncated and not warned_truncation:
+            console.print("[yellow]Earlier progress events were pruned.[/yellow]")
+            warned_truncation = True
+        for event in batch.events:
+            tool = f" tool={event.tool_name}" if event.tool_name else ""
+            console.print(Text(
+                f"#{event.sequence} {event.event.value} [{event.status.value}]{tool}",
+                style="dim",
+            ))
+        cursor = batch.next_sequence
+        if batch.terminal:
+            _show_task(agent, task_id, runner)
+            return
+        if batch.timed_out:
+            console.print(f"[yellow]Watch timed out after {timeout:g}s.[/yellow]")
+            return
+
+
+def _claim_task_scheduler(agent: Agent, runner: _AsyncLoopRunner) -> None:
+    """Explicitly acquire a released or stale workspace task lease."""
+    claimed = _run_on_cli_loop(runner, agent.claim_task_scheduler)
+    if claimed:
+        console.print("[green]This process owns the workspace task scheduler.[/green]")
+        return
+    owner = agent.task_scheduler_owner
+    if owner is None:
+        console.print("[yellow]Task scheduler lease is unavailable.[/yellow]")
+        return
+    console.print(
+        f"[yellow]Task scheduler is active in process {owner.process_id} "
+        f"on {owner.hostname}.[/yellow]"
+    )
 
 
 def _show_history(messages: list[dict]) -> None:
@@ -550,7 +1044,7 @@ async def _do_plan(agent: Agent, task: str):
 
     console.print(table)
 
-    # ask for confirmation (plain input() — pt_prompt conflicts with asyncio.run)
+    # Ask for confirmation while this coroutine is paused on the CLI loop.
     try:
         choice = input("\nExecute this plan? [y]es / [n]o / [m]odify: ").strip().lower()
     except (EOFError, KeyboardInterrupt):
@@ -583,14 +1077,12 @@ async def _do_plan(agent: Agent, task: str):
             console.print(f"\n[dim]> {name}({_brief(kwargs)})[/dim]")
 
         try:
-            asyncio.run(
-                agent.chat(
-                    f"Execute this single step from the plan: {step.action}\n"
-                    f"Suggested tool: {step.tool or 'any'}\n"
-                    f"Expected result: {step.expected}",
-                    on_token=on_token,
-                    on_tool=on_tool,
-                )
+            await agent.chat(
+                f"Execute this single step from the plan: {step.action}\n"
+                f"Suggested tool: {step.tool or 'any'}\n"
+                f"Expected result: {step.expected}",
+                on_token=on_token,
+                on_tool=on_tool,
             )
             print()
         except KeyboardInterrupt:
@@ -620,6 +1112,12 @@ def _show_help():
         "  /diff          Show files modified this session\n"
         "  /undo         Undo tracked file changes from this session\n"
         "  /undo force   Undo even when files changed externally\n"
+        "  /tasks        List delegated tasks\n"
+        "  /claim-tasks  Claim a released/stale workspace task scheduler lease\n"
+        "  /task <id>    Show one delegated task\n"
+        "  /wait-task <id> [seconds] Wait without changing the task deadline\n"
+        "  /watch-task <id> [seconds] Stream bounded task progress\n"
+        "  /cancel-task <id> Cancel a delegated task\n"
         "  /replay        Show replay log path\n"
         "  /plan <task>   Generate and execute a structured plan\n"
         "  /save          Save session to disk\n"

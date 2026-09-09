@@ -171,7 +171,7 @@ CoreCoder is a starting point, not a destination. It deliberately leaves blanks 
 - **Add a fallback model and a hard dollar budget.** Piece three covered how CoreCoder deliberately skipped these two, because they drag in provider-specific logic. For a production deployment, these two eventually have to be added.
 - **Make concurrency finer-grained.** Piece five's point about distinguishing whether a tool "reads" or "writes" to decide whether it can run concurrently is something CoreCoder still doesn't do, and is worth filling in seriously.
 - **Hook up MCP.** Let your agent plug into the Model Context Protocol tool ecosystem, instantly connecting to a large batch of ready-made external capabilities.
-- **Give sub-agents more modes.** Piece five mentioned Claude Code's sub-agents can run in an independent worktree or in the background, while CoreCoder only did the most plain synchronous one.
+- **Extend sub-agent background execution.** CoreCoder now supports constrained forks, isolated Git worktrees, staged Agent Teams, restart-visible terminal state, cursor-based progress, single-owner process leases, an opt-in encrypted queue, and lease-sharded multi-workspace worker pools behind one controller; richer opt-in telemetry remains a natural next step.
 
 Pick one you genuinely need and do it. Don't let the length of the list make you anxious; the charm of an agent is exactly that its core is small enough for one person to read through in a weekend, and its frontier is open enough that you can grow in any direction.
 

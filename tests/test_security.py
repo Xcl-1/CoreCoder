@@ -311,6 +311,36 @@ def test_guard_review_ask_with_callback_deny():
     assert decision.allowed is False
 
 
+def test_task_control_inspection_is_allowed_but_cancel_requires_confirmation():
+    prompts = []
+    guard = Guard(confirm_callback=lambda *_args: prompts.append(True) or False)
+
+    inspected = guard.review("task_control", {"action": "status", "task_id": "task_1"})
+    cancelled = guard.review("task_control", {"action": "cancel", "task_id": "task_1"})
+
+    assert inspected.allowed is True
+    assert cancelled.allowed is False
+    assert prompts == [True]
+    assert "discard unmerged child work" in cancelled.reason
+
+
+def test_durable_agent_task_requires_one_time_confirmation():
+    denied = Guard().review(
+        "agent",
+        {"task": "private objective", "background": True, "durable": True},
+    )
+    prompts = []
+    allowed = Guard(confirm_callback=lambda *args: prompts.append(args) or True).review(
+        "agent",
+        {"task": "private objective", "background": True, "durable": True},
+    )
+
+    assert not denied.allowed
+    assert "encrypts and persists" in denied.reason
+    assert allowed.allowed and allowed.user_confirmed
+    assert len(prompts) == 1
+
+
 def test_persistent_permission_edits_require_explicit_confirmation(tmp_path):
     permissions_path = tmp_path / ".corecoder" / "permissions.json"
     manager = PermissionManager()

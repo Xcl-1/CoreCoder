@@ -133,7 +133,121 @@ Three decisions are worth a closer look, because they're the kind of call you ca
 
 Large tool observations are externalized before they first enter history. The transcript keeps a deterministic preview and an `artifact://sha256/...` reference, and the read-only `retrieve_context` tool can recover exact keyword matches or line ranges later. At the summary watermark, older turns become a schema-validated JSON checkpoint containing the current goal, constraints, decisions, files, verification, errors, pending work, and artifact references. Checkpoints are versioned and only rewritten after a low-water rearm or a meaningful batch of new messages, keeping prompt prefixes stable between compactions. Set `CORECODER_CONTEXT_ARTIFACTS=0` to disable artifact storage; `CORECODER_CONTEXT_ARTIFACTS_DIR` and `CORECODER_CONTEXT_ARTIFACT_THRESHOLD` control storage and the default 12,000-character cutoff. `CORECODER_CONTEXT_ARTIFACT_TTL_DAYS` (default 30) and `CORECODER_CONTEXT_ARTIFACT_MAX_MB` (default 256) bound retention; expired artifacts are removed before the oldest entries are evicted for capacity. `/tokens` reports provider cache hit/miss usage when available, plus externalization, retrieval, pruning, compaction, and checkpoint counters.
 
-**You constrain a sub-agent by withholding the tool, not by writing rules and hoping it obeys.** A spawned sub-agent gets an isolated context and its own separate history, with a toolset exactly one item shorter than the parent's: the `agent` tool itself, so it can't recursively spawn more sub-agents. Handing it one fewer tool is cleaner than legislating a rule after the fact. It also reuses the parent's model connection (its spend folded into the same running total), truncates its output once it runs past 5,000 characters down to just the opening, and runs on a shorter round limit than the parent. The same restraint, end to end.
+**Sub-agents now run behind one parent-owned control plane.** Every delegation is a validated `TaskSpec`: objective, minimal context, exact tool allowlist, read/write roots, token and tool-call budgets, timeout, role, workspace mode, and acceptance criteria. `TaskController` owns the state machine, concurrency cap, timeout and cancellation. A child has an independent history, cannot receive the `agent` tool, cannot ask for permission elevation, and returns a bounded `TaskResult`; runtime code—not the child model—derives status, changed files, usage and policy violations. The parent still performs final review and acceptance.
+
+Library callers can use the protocol directly:
+
+```python
+from corecoder import Agent, TaskRole, TaskSpec
+
+spec = TaskSpec(
+    objective="Inspect authentication and identify its entry points",
+    role=TaskRole.RESEARCHER,
+    allowed_tools=("read_file", "grep", "glob"),
+    read_paths=("corecoder/security",),
+    token_budget=8_000,
+    timeout_seconds=120,
+    acceptance_criteria=("Cite the defining files",),
+)
+result = await agent.delegate(spec)
+assert result.requires_parent_review
+# After independently checking each criterion:
+# accepted = agent.accept_task(result.task_id, parent_verified_checks)
+```
+
+`agent.tasks.snapshot(task_id)`, `list_tasks()` and `events()` expose bounded,
+prompt-free control-plane state for monitoring. Lifecycle events are also written
+to the existing JSONL audit log with task, parent, child, role, permission scope,
+and workspace identity. Audit failures never change task execution, and retained
+in-memory task history is bounded by `task_history_limit`.
+
+Long-running tasks can be submitted without blocking the caller:
+
+```python
+task_id = await agent.submit_task(spec)
+snapshot = agent.tasks.snapshot(task_id)
+result = await agent.wait_task(task_id, timeout=30)  # waiter-only timeout
+# agent.cancel_task(task_id)                         # explicit task cancellation
+
+# Cursor-based progress: tool names and controller milestones, never arguments.
+batch = await agent.wait_task_events(task_id, after_sequence=0, timeout=30)
+cursor = batch.next_sequence
+```
+
+Cancelling or timing out a waiter does not cancel the background task. Only an
+explicit control-plane cancellation (or the task's own deadline) stops execution.
+The main model can request the same behavior with `agent(background=true)` and
+then use the parent-only `task_control` tool. In the interactive CLI, `/tasks`,
+`/task <id>`, `/wait-task <id> [seconds]`, and `/cancel-task <id>` expose the
+same operations; `/watch-task <id> [seconds]` streams cursor-based progress.
+The CLI keeps its event loop alive while waiting for terminal input, so
+submitted work continues between user commands. Progress events contain only
+controller milestones and tool names—not tool arguments, model tokens, or
+chain-of-thought. Clients receive a `history_truncated` flag if their cursor has
+fallen behind bounded retention.
+
+The CLI also keeps a bounded, append-only task journal under
+`~/.corecoder/tasks`, scoped by tenant/user and keyed by a digest of the
+workspace path. A later process in the same workspace restores terminal results
+for `/tasks`, `/task`, and `/wait-task`. Work that had no durable terminal result
+is marked `interrupted` and is never automatically replayed. The original
+`TaskSpec.objective` and context are not stored; terminal `TaskResult` content is
+stored so the parent can inspect the outcome. Set `CORECODER_TASK_PERSISTENCE=0`
+to disable this or `CORECODER_TASK_STATE_DIR` to move the journal.
+
+A heartbeat lease gives exactly one process scheduling and journal-write
+ownership for each workspace. A second process opens the same durable history
+in read-only observer mode: it can refresh, wait, and watch, but cannot submit or
+cancel delegated work. `/claim-tasks` explicitly acquires a released or stale
+lease; only then are genuinely abandoned tasks marked `interrupted`. A live PID
+on the same host is never displaced solely because its heartbeat is old. For
+shared storage across hosts, `CORECODER_TASK_LEASE_STALE_SECONDS` controls the
+stale-heartbeat threshold (default 30 seconds, minimum 5).
+
+Durable execution is explicit. Set `durable=True` only on a background
+`TaskSpec` (or use `agent(background=true, durable=true)`) to place its complete
+specification in an authenticated Fernet-encrypted queue before scheduling. The
+CLI resumes valid queued work after it acquires the workspace lease. Normal
+terminal results and explicit cancellation remove the item; a crash or shutdown
+keeps unfinished work for the next owner. Tampered, wrongly keyed, malformed, or
+over-capacity items are never executed. The generated queue key is stored as
+`.task-queue.key` in the tenant/user task-state directory with restrictive file
+permissions where supported. Durable mode through the model-facing tool requires
+a fresh user confirmation because objective and context are persisted. Ordinary
+tasks retain the prompt-free journal behavior.
+
+Run a dedicated foreground consumer from the repository it should own:
+
+```bash
+corecoder worker                       # poll continuously (default: every 1s)
+corecoder worker --poll-interval 0.25 # custom bounded polling interval
+corecoder worker --once               # drain the current queue and exit
+corecoder worker --workspace ../repo-a --workspace ../repo-b
+corecoder worker --workspace ../repo-a --workspace ../repo-b --workspace-concurrency 2
+```
+
+The worker uses the same `Agent`, lease, controller, tool boundaries, budgets,
+worktree merge, audit, and encrypted queue as the interactive CLI. It runs with
+no confirmation callback, so operations that require new human approval fail
+closed; durable submission must already have been approved by the producing
+client. A non-owner or persistence-disabled worker exits non-zero. Ctrl+C marks
+shutdown before asyncio cancels children, preserving unfinished durable items
+for the next worker. While a worker owns the lease, another CLI may enqueue an
+explicit durable task but still cannot directly execute or cancel delegated
+work. Repeating `--workspace` starts a pool with a separate Agent, tool registry,
+controller, queue and lease for each resolved directory. Queue scans run
+concurrently, so a busy repository cannot delay admission in another. Leases
+provide cross-process sharding: workspaces already owned by another live worker
+are skipped, while available workspaces continue normally; duplicate or missing
+workspace paths are rejected before execution.
+The pool-wide execution cap defaults to four and can be set from 1 to 32 with
+`--workspace-concurrency`; per-workspace controller limits still apply beneath it.
+In `--once` mode, both worker forms report succeeded and failed task counts;
+any terminal task failure or worker error produces a non-zero exit status.
+
+Both execution backends use the same protocol. `fork` operates in the shared tree and defaults to one child at a time. `worktree` requires a clean Git parent, runs the child in a detached managed worktree, collects a binary diff, checks it centrally with `git apply --check`, applies it to the parent, and records the result in `/undo`; a conflict leaves the parent untouched and retains the isolated tree for inspection. `bash` and `undo_changes` have no reliably enforceable path argument and are rejected in delegated specs unless a library caller explicitly opts into unscoped tools; worktree tasks reject them unconditionally.
+
+`Agent.run_team()` and `agent(mode="coding_team")` provide a staged researcher → executor → reviewer template over that controller. Only the parent forwards bounded summaries between stages. Read-only failures may opt into up to three budget-sharing retries, and repeated failures open a controller circuit breaker before more child work is admitted.
 
 Every one of these *whys* is traced down to the actual lines of code in the series below.
 
@@ -170,7 +284,7 @@ Going deeper, the directions are out in the open too. None of the following is i
 
 - **The dangerous-command blocking in bash is just a regex blacklist.** It guards against slips, not a security sandbox. Facing untrusted input means reaching for seccomp or container isolation. This is the hardest of the four; it goes all the way down to the syscall and isolation layer.
 - **Retry is only exponential backoff.** No fallback model, no hard dollar budget. Follow `llm.py` down and add a fallback model chain plus a stop-on-over-budget gate; the change stays mostly inside that one file.
-- **Sub-agents only run the plainest synchronous execution.** Make it async or a streaming executor and you close the exact gap the fifth essay identifies between this and how production agents stream execution.
+- **Background delegation remains deliberately small.** Worktree isolation, staged Agent Teams, bounded retries, circuit breaking, cursor-based progress, process leases, an opt-in encrypted queue, and lease-sharded multi-workspace worker pools now share one controller; richer opt-in telemetry remains a natural extension point.
 - **No MCP, no RAG.** Wire up MCP to give it the external tool ecosystem, or add retrieval-based code location for big repos. Both are real ways to grow from a minimal core into your own stronger agent.
 
 The README only points; the seventh essay picks up the code details for each. Pick one and start; that's the whole reason the core is kept this small.

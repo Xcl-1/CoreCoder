@@ -1322,6 +1322,7 @@ def test_evolved_skill_inherits_explicit_procedure_tool_boundaries(tmp_path):
         "bash",
         "edit_ast",
         "edit_file",
+        "task_control",
         "undo_changes",
         "write_file",
     ]

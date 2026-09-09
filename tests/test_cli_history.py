@@ -1,10 +1,24 @@
+import asyncio
+import sys
+import threading
 from io import StringIO
 from types import SimpleNamespace
 
+import pytest
 from rich.console import Console
 
 import corecoder.cli as cli_module
 from corecoder.config import Config
+from corecoder.delegation import (
+    TaskEvent,
+    TaskEventBatch,
+    TaskEventKind,
+    TaskRole,
+    TaskSnapshot,
+    TaskStatus,
+    TaskUsage,
+    WorkspaceMode,
+)
 from corecoder.security import (
     AuditEntry,
     AuditLogger,
@@ -96,6 +110,9 @@ def test_repl_renders_loaded_history_when_requested(monkeypatch):
         def close(self):
             pass
 
+        async def recover_durable_tasks(self):
+            return ()
+
     def _end_prompt(*_args, **_kwargs):
         raise EOFError
 
@@ -125,6 +142,149 @@ def test_help_renders_argument_placeholders_literally(monkeypatch):
     rendered = output.getvalue()
     assert "/permissions [user|session|project|builtin]" in rendered
     assert "/audit [filter] [n] [tool=<name>]" in rendered
+    assert "/tasks" in rendered
+    assert "/claim-tasks" in rendered
+    assert "/watch-task" in rendered
+    assert "/wait-task <id> [seconds]" in rendered
+
+
+def test_worker_cli_arguments(monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "corecoder",
+            "worker",
+            "--once",
+            "--poll-interval",
+            "0.25",
+            "--workspace-concurrency",
+            "3",
+            "--workspace",
+            ".",
+            "--workspace",
+            "tests",
+        ],
+    )
+    args = cli_module._parse_args()
+    assert args.command == "worker"
+    assert args.once is True
+    assert args.poll_interval == 0.25
+    assert args.workspace_concurrency == 3
+    assert args.workspace == [".", "tests"]
+
+
+def test_worker_workspace_resolution_rejects_duplicates_and_missing(tmp_path):
+    with pytest.raises(ValueError, match="unique"):
+        cli_module._resolve_worker_workspaces([str(tmp_path), str(tmp_path / ".")])
+    with pytest.raises(ValueError, match="existing directory"):
+        cli_module._resolve_worker_workspaces([str(tmp_path / "missing")])
+
+
+def test_cli_async_loop_keeps_background_work_running_while_input_thread_waits():
+    finished = threading.Event()
+
+    async def launch_background():
+        async def background():
+            await asyncio.sleep(0.01)
+            finished.set()
+
+        asyncio.create_task(background())
+
+    with cli_module._AsyncLoopRunner() as runner:
+        runner.run(launch_background())
+        assert finished.wait(timeout=1)
+
+
+def test_cli_watch_task_renders_structured_progress(monkeypatch):
+    output = _captured_console(monkeypatch)
+    shown = []
+    snapshot = TaskSnapshot(
+        task_id="task_watch",
+        agent_id="agent_watch",
+        parent_id="parent",
+        role=TaskRole.RESEARCHER,
+        execution_mode=WorkspaceMode.FORK,
+        status=TaskStatus.COMPLETED,
+        submitted_at="2026-09-08T00:00:00+00:00",
+    )
+    event = TaskEvent(
+        sequence=3,
+        timestamp="2026-09-08T00:00:01+00:00",
+        event=TaskEventKind.TOOL_STARTED,
+        task_id=snapshot.task_id,
+        agent_id=snapshot.agent_id,
+        parent_id=snapshot.parent_id,
+        role=snapshot.role,
+        execution_mode=snapshot.execution_mode,
+        status=TaskStatus.RUNNING,
+        tool_name="read_file",
+    )
+
+    class _Tasks:
+        @staticmethod
+        def snapshot(task_id):
+            return snapshot if task_id == snapshot.task_id else None
+
+    class _Agent:
+        tasks = _Tasks()
+
+        @staticmethod
+        def refresh_task_state():
+            return ()
+
+        @staticmethod
+        async def wait_task_events(*_args, **_kwargs):
+            return TaskEventBatch(events=(event,), next_sequence=3, terminal=True)
+
+    monkeypatch.setattr(cli_module, "_show_task", lambda *_args: shown.append(snapshot.task_id))
+    with cli_module._AsyncLoopRunner() as runner:
+        cli_module._watch_task(_Agent(), "task_watch 1", runner)
+
+    rendered = output.getvalue()
+    assert "#3 tool_started [running] tool=read_file" in rendered
+    assert shown == [snapshot.task_id]
+
+
+def test_cli_task_views_and_explicit_cancel(monkeypatch):
+    output = _captured_console(monkeypatch)
+    snapshot = TaskSnapshot(
+        task_id="task_123",
+        agent_id="agent_123",
+        parent_id="main",
+        role=TaskRole.RESEARCHER,
+        execution_mode=WorkspaceMode.FORK,
+        status=TaskStatus.RUNNING,
+        submitted_at="2026-09-08T00:00:00+00:00",
+        usage=TaskUsage(prompt_tokens=10, completion_tokens=2, tool_calls=1),
+    )
+
+    class _Tasks:
+        def list_tasks(self, *, limit):
+            assert limit == 50
+            return (snapshot,)
+
+        def snapshot(self, task_id):
+            return snapshot if task_id == snapshot.task_id else None
+
+        def result(self, _task_id):
+            return None
+
+    agent = SimpleNamespace(
+        tasks=_Tasks(),
+        refresh_task_state=lambda: (),
+        cancel_task=lambda task_id: task_id == snapshot.task_id,
+    )
+
+    cli_module._show_tasks(agent)
+    cli_module._show_task(agent, snapshot.task_id)
+    cli_module._cancel_task(agent, snapshot.task_id)
+
+    rendered = output.getvalue()
+    assert "Delegated Tasks (1)" in rendered
+    assert "task_123" in rendered
+    assert "researcher" in rendered
+    assert "Cancellation requested" in rendered
 
 
 def test_cli_undo_records_exact_runtime_state(monkeypatch):

@@ -11,7 +11,7 @@ from corecoder.tools import ALL_TOOLS, get_tool
 
 
 def test_tool_count():
-    assert len(ALL_TOOLS) == 9
+    assert len(ALL_TOOLS) == 10
 
 
 def test_skill_tool_policy_registry_tracks_all_tools():
@@ -355,3 +355,15 @@ def test_agent_tool_schema():
     s = agent_t.schema()
     assert s["function"]["name"] == "agent"
     assert "task" in s["function"]["parameters"]["properties"]
+    assert "background" in s["function"]["parameters"]["properties"]
+    assert "durable" in s["function"]["parameters"]["properties"]
+
+
+def test_task_control_tool_schema():
+    task_control = get_tool("task_control")
+    schema = task_control.schema()
+    assert schema["function"]["name"] == "task_control"
+    assert schema["function"]["parameters"]["required"] == ["action"]
+    properties = schema["function"]["parameters"]["properties"]
+    assert "events" in properties["action"]["enum"]
+    assert "after_sequence" in properties

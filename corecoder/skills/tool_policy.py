@@ -13,6 +13,7 @@ KNOWN_TOOL_NAMES = frozenset({
     "glob",
     "grep",
     "read_file",
+    "task_control",
     "undo_changes",
     "write_file",
 })

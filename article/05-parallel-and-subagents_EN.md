@@ -2,6 +2,8 @@
 
 When piece one covered the main loop, I left a gap at the "execute tools" step: the model wanting one tool at a time and the model wanting several at once take two different paths. This piece first fills that gap, then covers a tool that lets the agent spawn a "clone" of itself. The two are really two sides of one theme: how to let one agent handle several things at once without scrambling them together.
 
+> **Version note:** This essay preserves the original minimal synchronous sub-agent so the basic mechanism stays easy to study. The current code now adds `TaskSpec`/`TaskResult`, authority and path boundaries, budgets/timeouts/cancellation, bounded retries and circuit breaking, a Git worktree backend, and staged Agent Teams behind one `TaskController`. See `corecoder/delegation.py` and `corecoder/workspaces.py` for the current implementation.
+
 ## Several tool calls come back at once
 
 The model doesn't always want one tool at a time. Ask it "tell me what each of these three files does" and it'll very likely return three `read_file` calls in one go. Those three reads are independent of each other, and running them serially is dead waiting when they could clearly go together.
@@ -127,7 +129,7 @@ Remember piece one stressing that `_tool_by_name` is instance-level? Precisely b
 
 ## Compared with Claude Code
 
-Claude Code's sub-agent system (its AgentTool is over a thousand lines in public teardowns) is far richer: sub-agents have several run modes, including running in an independent git worktree and running asynchronously in the background, plus several built-in preset agent types, each with its own system prompt and tool set. CoreCoder converges all this into the most plain one: synchronous spawn, run and return, no recursion.
+Claude Code's sub-agent system (its AgentTool is over a thousand lines in public teardowns) is far richer. CoreCoder now implements the same important execution shapes behind a smaller central protocol: bounded foreground or background tasks, isolated Git worktrees, staged role templates, and parent-only task control. It still cuts recursion off at one child layer.
 
 But the core motivation, "use a sub-agent with independent context to isolate heavy work and protect the main window," is the same in both. Read CoreCoder's 58 lines and you've grasped the most essential point of multi-agent collaboration: it's a context-management means first, and a task-decomposition means second. Many people think a sub-agent is for "doing more work in parallel," but its greatest value is actually "keeping the noise of other work out of the main conversation."
 
