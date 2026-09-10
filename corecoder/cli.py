@@ -28,7 +28,7 @@ from .config import Config
 from .llm import LLM, LiteLLM
 from .memory import MemoryEngine, MemoryWorker
 from .security import ConfirmationContext, Guard, NetworkPolicy, PermissionRule
-from .session import list_sessions, load_session, save_session
+from .session import list_sessions, load_session_record, save_session
 from .skills import SkillManager
 from .worker import DurableTaskWorker, DurableTaskWorkerPool
 
@@ -281,13 +281,14 @@ def main():
 
     # resume saved session
     if args.resume:
-        loaded = load_session(args.resume)
+        loaded = load_session_record(args.resume)
         if loaded:
-            agent.messages, loaded_model = loaded
+            agent.messages = loaded.messages
+            agent.transcript = loaded.transcript
             # restore the model from the saved session unless overridden by CLI
             if not args.model:
-                agent.llm.model = loaded_model
-                config.model = loaded_model
+                agent.llm.model = loaded.model
+                config.model = loaded.model
             agent.mark_memory_checkpointed()
             console.print(f"[green]Resumed session: {args.resume} (model: {agent.llm.model})[/green]")
         else:
@@ -438,7 +439,7 @@ def _repl_loop(
     ))
 
     if show_history:
-        _show_history(agent.messages)
+        _show_history(getattr(agent, "transcript", agent.messages))
 
     hist_path = os.path.expanduser("~/.corecoder_history")
     history = FileHistory(hist_path)
@@ -602,6 +603,14 @@ def _repl_loop(
             else:
                 for s in sessions:
                     console.print(f"  [cyan]{s['id']}[/cyan] ({s['model']}, {s['saved_at']}) {s['preview']}")
+            continue
+        if user_input == "/history" or user_input.startswith("/history "):
+            history_arg = user_input[len("/history"):].strip()
+            if history_arg and (not history_arg.isdecimal() or int(history_arg) < 1):
+                console.print("[yellow]Usage: /history [positive turn count][/yellow]")
+                continue
+            history = getattr(agent, "transcript", agent.messages)
+            _show_history(history, int(history_arg) if history_arg else None)
             continue
         if user_input == "/memory":
             _show_memory(agent, config)
@@ -935,8 +944,15 @@ def _claim_task_scheduler(agent: Agent, runner: _AsyncLoopRunner) -> None:
     )
 
 
-def _show_history(messages: list[dict]) -> None:
-    """Render the human-facing portion of a resumed conversation."""
+def _show_history(transcript: list[dict], limit: int | None = None) -> None:
+    """Render all or the most recent user turns from the display transcript."""
+    messages = [message for message in transcript if isinstance(message, dict)]
+    if limit is not None:
+        user_positions = [
+            index for index, message in enumerate(messages) if message.get("role") == "user"
+        ]
+        if len(user_positions) > limit:
+            messages = messages[user_positions[-limit]:]
     if not messages:
         return
 
@@ -955,12 +971,7 @@ def _show_history(messages: list[dict]) -> None:
     for message in messages:
         role = message.get("role", "")
         content = message.get("content")
-        if content is None:
-            text = ""
-        elif isinstance(content, str):
-            text = content
-        else:
-            text = str(content)
+        text = content if isinstance(content, str) else ""
 
         if role == "tool":
             hidden_tool_results += 1
@@ -995,6 +1006,7 @@ def _show_history(messages: list[dict]) -> None:
                 padding=(0, 1),
             ))
 
+        # Kept for version-1 sessions passed directly to this compatibility renderer.
         for tool_call in message.get("tool_calls") or []:
             function = tool_call.get("function") or {}
             name = str(function.get("name") or "unknown")
@@ -1122,6 +1134,7 @@ def _show_help():
         "  /plan <task>   Generate and execute a structured plan\n"
         "  /save          Save session to disk\n"
         "  /sessions      List saved sessions\n"
+        "  /history [n]   Show all history or the latest n turns\n"
         "  /memory        List cross-session memories\n"
         "  /memory forget <id> Delete one memory\n"
         "  /memory show <id> Show one memory\n"
@@ -1250,7 +1263,12 @@ def _save_current_session(agent: Agent, config: Config) -> str | None:
     if not agent.messages:
         return None
     try:
-        session_id = save_session(agent.messages, config.model, agent.session_id)
+        session_id = save_session(
+            agent.messages,
+            config.model,
+            agent.session_id,
+            transcript=agent.transcript,
+        )
         agent.session_id = session_id
         agent.checkpoint_memory()
         return session_id

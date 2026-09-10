@@ -53,6 +53,16 @@ from .delegation import (
 from .execution import incomplete_answer
 from .llm import LLM
 from .models import PlanRecord, StepRecord, ToolExecRecord
+from .orchestration import (
+    ApprovalDecision,
+    LangGraphOrchestrator,
+    LangGraphTurnOrchestrator,
+    TurnExecution,
+    TurnStatus,
+    TurnWorkflowResult,
+    WorkflowRequest,
+    WorkflowResult,
+)
 from .prompt import system_prompt
 from .replay import ReplayLogger
 from .task_journal import TaskJournal, TaskLeaseRecord, TaskWorkspaceLease
@@ -167,6 +177,7 @@ class Agent:
         skills: SkillManager | None = None,
         changes: ChangeTracker | None = None,
         session_id: str | None = None,
+        transcript: list[dict] | None = None,
         artifact_store: ContextArtifactStore | None = None,
         context_artifacts_enabled: bool = True,
         context_artifacts_dir: str | Path | None = None,
@@ -212,6 +223,14 @@ class Agent:
             self.tools.append(RetrieveContextTool(self.context_artifacts))
         self._tool_by_name = {t.name: t for t in self.tools}
         self.messages: list[dict] = []
+        self.transcript: list[dict] = [
+            {"role": message["role"], "content": message["content"]}
+            for message in (transcript or [])
+            if isinstance(message, dict)
+            and message.get("role") in {"user", "assistant"}
+            and isinstance(message.get("content"), str)
+            and message["content"]
+        ]
         self._turn_messages: list[dict] = []
         self._policy_violations = 0
         self.context = ContextManager(
@@ -299,6 +318,11 @@ class Agent:
         }
         self._task_execution_limiter = task_execution_limiter
         self.tasks = self._new_task_controller()
+        self.orchestrator = LangGraphOrchestrator(self._execute_scoped_task)
+        self.turn_orchestrator = LangGraphTurnOrchestrator(self._execute_chat_turn)
+        self.plan_orchestrator = LangGraphTurnOrchestrator(self._execute_plan_turn)
+        self.last_turn_workflow: TurnWorkflowResult | None = None
+        self._background_workflows: dict[str, asyncio.Task[WorkflowResult]] = {}
         self._worktree_merge_lock = asyncio.Lock()
         if self._task_journal is not None:
             loaded = self._task_journal.load()
@@ -336,7 +360,11 @@ class Agent:
         return self._durable_queue is not None
 
     def is_task_queued(self, task_id: str) -> bool:
-        return self._durable_queue is not None and self._durable_queue.contains(task_id)
+        return (
+            task_id in self._background_workflows
+            or self._durable_queue is not None
+            and self._durable_queue.contains(task_id)
+        )
 
     @property
     def task_scheduler_owner(self) -> TaskLeaseRecord | None:
@@ -556,15 +584,44 @@ class Agent:
                    on_token: Callable[[str], None] | None = None,
                    on_tool: Callable[[str, dict[str, Any]], None] | None = None,
                    routing_context: RoutingContext | dict | None = None) -> str:
+        """Process one user turn through the unified LangGraph path."""
+        result = await self.turn_orchestrator.run(
+            user_input,
+            on_token=on_token,
+            on_tool=on_tool,
+            routing_context=routing_context,
+        )
+        self.last_turn_workflow = result
+        return result.execution.answer
+
+    async def _execute_chat_turn(
+        self,
+        user_input: str,
+        on_token: Callable[[str], None] | None = None,
+        on_tool: Callable[[str, dict[str, Any]], None] | None = None,
+        routing_context: RoutingContext | dict | None = None,
+    ) -> TurnExecution:
+        """Run the guarded agent loop; called only by the turn graph."""
         self._turn_messages = []
         self._policy_violations = 0
+        self.transcript.append({"role": "user", "content": user_input})
         if self.guard is not None and hasattr(self.guard, "begin_turn"):
             self.guard.begin_turn()
-        status = "failed"
+        status = TurnStatus.FAILED
         try:
             answer = await self._chat(user_input, on_token, on_tool, routing_context)
-            status = "partial" if incomplete_answer(answer) or self._policy_violations else "completed"
-            return answer
+            status = (
+                TurnStatus.PARTIAL
+                if incomplete_answer(answer) or self._policy_violations
+                else TurnStatus.COMPLETED
+            )
+            if answer:
+                self.transcript.append({"role": "assistant", "content": answer})
+            return TurnExecution(
+                answer=answer,
+                status=status,
+                policy_violations=self._policy_violations,
+            )
         except (Exception, KeyboardInterrupt, asyncio.CancelledError) as exc:
             answered = {m.get("tool_call_id") for m in self._turn_messages if m.get("role") == "tool"}
             pending = [call for m in self._turn_messages for call in m.get("tool_calls", [])
@@ -580,7 +637,8 @@ class Agent:
         finally:
             if self._turn_messages:
                 self._turn_messages[-1]["_execution"] = {
-                    "status": status, "policy_violations": self._policy_violations,
+                    "status": status.value,
+                    "policy_violations": self._policy_violations,
                 }
                 if self.messages:
                     self.messages[-1]["_execution"] = dict(self._turn_messages[-1]["_execution"])
@@ -953,6 +1011,7 @@ class Agent:
     def reset(self):
         """Clear conversation history."""
         self.messages.clear()
+        self.transcript.clear()
         self._turn_messages.clear()
         self._policy_violations = 0
         max_context_tokens = self.context.max_tokens
@@ -1215,6 +1274,9 @@ class Agent:
     def close(self):
         """Stop background intake and close replay without waiting on the network."""
         self.prepare_shutdown()
+        for workflow in self._background_workflows.values():
+            workflow.cancel()
+        self._background_workflows.clear()
         self.tasks.cancel_all()
         if self.memory_worker is not None:
             self.memory_worker.close(wait=False)
@@ -1264,26 +1326,83 @@ class Agent:
             text = f"{text}\n\n[Reviewer ({AgentRole.REVIEWER.value})]\n{review}"
         return text[:5000]
 
-    async def delegate(self, spec: TaskSpec) -> TaskResult:
-        """Submit a fully-scoped task through this agent's controller."""
-        if spec.durable:
-            raise ValueError("durable tasks must use submit_task background execution")
+    async def _execute_scoped_task(self, spec: TaskSpec) -> TaskResult:
+        """Controller entry used only by the LangGraph task executor node."""
         return await self.tasks.execute(spec)
 
+    async def delegate(self, spec: TaskSpec) -> TaskResult:
+        """Run a fully-scoped foreground task through LangGraph."""
+        workflow = await self.run_workflow(WorkflowRequest(task=spec))
+        result = workflow.final_task_result
+        if result is not None:
+            return result
+        return TaskResult(
+            task_id=spec.task_id,
+            agent_id=f"workflow_{workflow.workflow_id[-12:]}",
+            parent_id=self.agent_id,
+            role=spec.role,
+            execution_mode=spec.execution_mode,
+            status=TaskStatus.INTERRUPTED,
+            error=workflow.error or "workflow interrupted before task execution",
+        )
+
+    async def run_workflow(self, request: WorkflowRequest) -> WorkflowResult:
+        """Run one foreground task through the configured orchestration backend."""
+        return await self.orchestrator.run(request)
+
+    async def resume_workflow(
+        self,
+        workflow_id: str,
+        decision: ApprovalDecision,
+    ) -> WorkflowResult:
+        """Resume a paused workflow through its configured checkpointer."""
+        return await self.orchestrator.resume(workflow_id, decision)
+
     async def submit_task(self, spec: TaskSpec) -> str:
-        """Schedule a scoped task and return before the child finishes."""
+        """Schedule a scoped LangGraph workflow and return immediately."""
         if spec.durable:
             if self._durable_queue is None:
                 raise RuntimeError("durable tasks require task persistence")
             self._durable_queue.enqueue(spec)
             if not self.owns_task_scheduler:
                 return spec.task_id
+        return await self._schedule_background_workflow(spec)
+
+    async def _schedule_background_workflow(self, spec: TaskSpec) -> str:
+        if spec.task_id in self._background_workflows:
+            raise ValueError(f"duplicate task_id: {spec.task_id}")
+        task = asyncio.create_task(
+            self.run_workflow(WorkflowRequest(task=spec)),
+            name=f"workflow:{spec.task_id}",
+        )
+        self._background_workflows[spec.task_id] = task
+
+        def discard(done: asyncio.Task[WorkflowResult]) -> None:
+            if self._background_workflows.get(spec.task_id) is done:
+                self._background_workflows.pop(spec.task_id, None)
+            try:
+                done.result()
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                logger.exception(
+                    "Background workflow %s failed outside its isolation boundary",
+                    spec.task_id,
+                )
+
+        task.add_done_callback(discard)
         try:
-            return await self.tasks.submit(spec)
+            await asyncio.sleep(0)
         except BaseException:
+            task.cancel()
             if spec.durable and self._durable_queue is not None:
                 self._durable_queue.remove(spec.task_id)
             raise
+        if task.done() and not task.cancelled():
+            error = task.exception()
+            if error is not None:
+                raise error
+        return spec.task_id
 
     async def recover_durable_tasks(self) -> tuple[str, ...]:
         """Schedule authenticated durable queue entries after startup."""
@@ -1309,7 +1428,7 @@ class Agent:
             ):
                 continue
             try:
-                recovered.append(await self.tasks.submit(spec))
+                recovered.append(await self._schedule_background_workflow(spec))
             except Exception:
                 logger.warning("Failed to recover durable task %s", spec.task_id, exc_info=True)
         return tuple(recovered)
@@ -1339,7 +1458,17 @@ class Agent:
                 await asyncio.sleep(
                     0.2 if deadline is None else min(0.2, max(0, deadline - loop.time()))
                 )
-        return await self.tasks.wait(task_id, timeout=timeout)
+        result = self.tasks.result(task_id)
+        if result is not None:
+            return result
+        workflow_task = self._background_workflows.get(task_id)
+        if workflow_task is None:
+            return await self.tasks.wait(task_id, timeout=timeout)
+        workflow = await asyncio.wait_for(asyncio.shield(workflow_task), timeout=timeout)
+        result = workflow.final_task_result
+        if result is None:
+            raise RuntimeError(workflow.error or "workflow stopped before task execution")
+        return result
 
     async def wait_task_events(
         self,
@@ -1372,10 +1501,34 @@ class Agent:
                 await asyncio.sleep(
                     0.2 if deadline is None else min(0.2, max(0, deadline - loop.time()))
                 )
+        loop = asyncio.get_running_loop()
+        deadline = None if timeout is None else loop.time() + timeout
+        while (
+            self.tasks.snapshot(task_id) is None
+            and task_id in self._background_workflows
+        ):
+            workflow = self._background_workflows[task_id]
+            if workflow.done():
+                break
+            if deadline is not None and loop.time() >= deadline:
+                return TaskEventBatch(
+                    next_sequence=after_sequence,
+                    timed_out=True,
+                )
+            await asyncio.sleep(0)
+        if self.tasks.snapshot(task_id) is None:
+            raise RuntimeError("workflow ended before task registration")
+        remaining = None if deadline is None else max(0, deadline - loop.time())
+        if remaining == 0:
+            return self.tasks.event_batch(
+                task_id=task_id,
+                after_sequence=after_sequence,
+                limit=limit,
+            ).model_copy(update={"timed_out": True})
         return await self.tasks.wait_events(
             task_id=task_id,
             after_sequence=after_sequence,
-            timeout=timeout,
+            timeout=remaining,
             limit=limit,
         )
 
@@ -1383,11 +1536,19 @@ class Agent:
         """Request cancellation through the parent-owned control plane."""
         if not self.owns_task_scheduler:
             return False
-        return self.tasks.cancel(task_id)
+        cancelled = self.tasks.cancel(task_id)
+        workflow_task = self._background_workflows.get(task_id)
+        if not cancelled and workflow_task is not None and not workflow_task.done():
+            workflow_task.cancel()
+            cancelled = True
+        return cancelled
 
     async def delegate_many(self, specs: list[TaskSpec]) -> list[TaskResult]:
-        """Submit independent tasks under the configured concurrency cap."""
-        return await self.tasks.execute_many(specs)
+        """Run independent LangGraph workflows under the controller cap."""
+        task_ids = [spec.task_id for spec in specs]
+        if len(task_ids) != len(set(task_ids)):
+            raise ValueError("batch contains duplicate task_id values")
+        return list(await asyncio.gather(*(self.delegate(spec) for spec in specs)))
 
     async def submit_tasks(self, specs: list[TaskSpec]) -> tuple[str, ...]:
         """Schedule independent scoped tasks without waiting for completion."""
@@ -1763,15 +1924,11 @@ Task: {task}
 
 Plan (JSON only):"""
 
-        resp = await asyncio.to_thread(
-            self.llm.chat,
-            messages=[{"role": "user", "content": prompt}],
-            tools=None,
-            on_token=None,
-        )
+        turn = await self.plan_orchestrator.run(prompt)
+        self.last_turn_workflow = turn
 
         # extract JSON from the response (may be wrapped in ```json blocks)
-        text = resp.content.strip()
+        text = turn.execution.answer.strip()
         if "```" in text:
             # extract content between first ```json and last ```
             text = text.split("```json", 1)[-1].split("```", 1)[0].strip()
@@ -1786,6 +1943,27 @@ Plan (JSON only):"""
 
         plan = PlanRecord.model_validate_json(text)
         return plan
+
+    async def _execute_plan_turn(
+        self,
+        prompt: str,
+        _on_token: Callable[[str], None] | None = None,
+        _on_tool: Callable[[str, dict[str, Any]], None] | None = None,
+        _routing_context: Any = None,
+    ) -> TurnExecution:
+        """Run the tool-free plan model call inside the turn graph."""
+        response = await asyncio.to_thread(
+            self.llm.chat,
+            messages=[{"role": "user", "content": prompt}],
+            tools=None,
+            on_token=None,
+        )
+        status = (
+            TurnStatus.PARTIAL
+            if incomplete_answer(response.content)
+            else TurnStatus.COMPLETED
+        )
+        return TurnExecution(answer=response.content, status=status)
 
     def _account_response_usage(self, response: Any) -> None:
         """Track usage per agent even when parent and child share one LLM."""

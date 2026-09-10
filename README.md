@@ -155,6 +155,55 @@ assert result.requires_parent_review
 # accepted = agent.accept_task(result.task_id, parent_verified_checks)
 ```
 
+CoreCoder uses LangGraph as its single user-facing orchestration path. The
+native adapter remains only as an internal compatibility and evaluation baseline:
+
+```bash
+pip install -e .
+corecoder
+```
+
+```python
+from corecoder import Agent, TaskSpec, WorkflowRequest
+
+agent = Agent(llm=llm)
+workflow = await agent.run_workflow(WorkflowRequest(
+    task=TaskSpec(objective="Implement and verify the scoped change"),
+    max_replans=1,
+    max_total_tokens=24_000,
+))
+```
+
+The graph is `plan -> approval -> execute -> verify -> review -> decide`. It does
+not receive tools or filesystem access: execution still goes through
+`TaskController`, and a planner may refine instructions but cannot broaden the
+task's role, tools, paths, budgets, timeout, acceptance criteria, or execution
+mode. Policy violations and exhausted budgets are never retried; write retries
+require worktree isolation. Unscoped high-risk tools interrupt before execution
+and resume only with a decision bound to the exact task digest.
+
+There is no native execution bypass in the public Agent API. Every main-agent
+and child-agent `chat()` turn runs through a LangGraph turn lifecycle
+(`plan -> execute -> verify -> review`); foreground delegation, background and
+durable work, batch delegation, and team stages additionally run through the
+scoped task graph above. The raw model/tool loop and direct controller executor
+are private graph-node callbacks, which prevents orchestration recursion while
+keeping one user-visible execution path. `agent.last_turn_workflow` exposes the
+most recent turn trace for diagnostics.
+
+In-memory checkpoints are the default. Library callers that need restart
+recovery can pass `encrypted_sqlite_checkpointer(path, key=...)`; only strictly
+allowlisted protocol and control-plane types are serialized, and the AES key
+must be 16, 24, or 32 bytes. The built-in planner/verifier/reviewer are deliberately deterministic:
+LangGraph improves control flow, not model intelligence. Inject independent
+callbacks when stronger planning or review is needed, and keep parent-side test
+and acceptance verification as the authority.
+
+`measure_workflow()` and `summarize_workflows()` derive comparable success,
+retry, token, latency, tool-call, policy-violation, reported-test, and
+parent-verified-acceptance metrics from structured results. This makes Native
+versus LangGraph A/B evaluation possible without trusting model-written prose.
+
 `agent.tasks.snapshot(task_id)`, `list_tasks()` and `events()` expose bounded,
 prompt-free control-plane state for monitoring. Lifecycle events are also written
 to the existing JSONL audit log with task, parent, child, role, permission scope,
@@ -300,6 +349,7 @@ Inside the REPL, `/help` lists everything; these are the ones you'll reach for:
 /diff            files changed this session
 /undo            undo tracked write/edit changes (`/undo force` overrides conflicts)
 /save  /sessions checkpoint / list all sessions
+/history [n]     show all history / latest n turns
 /memory          inspect memories and pending reflections
 /memory show <id> / search <query> / archive <id> / approve <id> / reflect
 /skills          list built-in, user, and project skills
@@ -311,7 +361,7 @@ Inside the REPL, `/help` lists everything; these are the ones you'll reach for:
 quit / exit      exit (Ctrl+C cancels the current round)
 ```
 
-Complete conversations are automatically checkpointed after every turn under `~/.corecoder/sessions`; `/save` creates an explicit checkpoint, `/sessions` lists every saved conversation, and `corecoder -r <id>` resumes one and displays its saved user/assistant history in interactive mode. Tool results stay hidden to keep the terminal readable. Session IDs are sanitized before becoming filenames.
+Complete conversations are automatically checkpointed after every turn under `~/.corecoder/sessions`; `/save` creates an explicit checkpoint, `/sessions` lists every saved conversation, and `corecoder -r <id>` resumes one and displays its saved user/assistant history in interactive mode. `/history` displays it again, while `/history <n>` limits output to the latest *n* user turns. Version-2 session files keep an independent display transcript, so context compression cannot erase the original conversation; model/tool messages remain separate and tool results stay hidden. Version-1 files are loaded compatibly and upgraded on their next save. Session IDs are sanitized before becoming filenames.
 
 `/undo` restores the original bytes of files changed through `write_file`, `edit_file`, or `edit_ast` during the current CoreCoder process, and deletes files created by those tools. Multiple edits to one file still return to its first pre-edit state. If a file changed outside CoreCoder after the latest tracked write, normal undo leaves it untouched as a conflict; `/undo force` explicitly overrides that protection. Undo history survives `/reset`, but is not persisted across process restarts or resumed sessions. Arbitrary filesystem side effects from `bash` cannot be guaranteed and are outside the undo set.
 

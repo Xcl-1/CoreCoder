@@ -105,7 +105,8 @@ def test_repl_renders_loaded_history_when_requested(monkeypatch):
         def __init__(self):
             self._replay = None
             self.session_id = "resumed-session"
-            self.messages = [{"role": "user", "content": "Earlier question"}]
+            self.messages = [{"role": "user", "content": "Compressed context"}]
+            self.transcript = [{"role": "user", "content": "Earlier question"}]
 
         def close(self):
             pass
@@ -134,6 +135,26 @@ def test_show_history_ignores_empty_history(monkeypatch):
     assert output.getvalue() == ""
 
 
+def test_show_history_can_limit_by_user_turn(monkeypatch):
+    output = _captured_console(monkeypatch)
+    transcript = [
+        {"role": "user", "content": "question one"},
+        {"role": "assistant", "content": "answer one"},
+        {"role": "user", "content": "question two"},
+        {"role": "assistant", "content": "answer two"},
+        {"role": "user", "content": "question three"},
+        {"role": "assistant", "content": "answer three"},
+    ]
+
+    cli_module._show_history(transcript, limit=2)
+
+    rendered = output.getvalue()
+    assert "question one" not in rendered
+    assert "answer one" not in rendered
+    assert "question two" in rendered
+    assert "answer three" in rendered
+
+
 def test_help_renders_argument_placeholders_literally(monkeypatch):
     output = _captured_console(monkeypatch)
 
@@ -146,6 +167,7 @@ def test_help_renders_argument_placeholders_literally(monkeypatch):
     assert "/claim-tasks" in rendered
     assert "/watch-task" in rendered
     assert "/wait-task <id> [seconds]" in rendered
+    assert "/history [n]" in rendered
 
 
 def test_worker_cli_arguments(monkeypatch):

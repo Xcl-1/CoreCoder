@@ -18,6 +18,7 @@ from corecoder.delegation import (
     WorkspaceMode,
 )
 from corecoder.llm import LLM, LiteLLM
+from corecoder.orchestration import WorkflowRequest, measure_workflow
 from corecoder.security import AuditLogger, Guard
 from corecoder.tools import ALL_TOOLS
 
@@ -166,7 +167,10 @@ async def main() -> None:
             timeout_seconds=180,
             acceptance_criteria=("add(7, 5) returns 12",),
         )
-        worktree_result = await worktree_agent.delegate(spec)
+        workflow_result = await worktree_agent.run_workflow(WorkflowRequest(task=spec))
+        assert workflow_result.status == TaskStatus.COMPLETED, workflow_result.error
+        worktree_result = workflow_result.final_task_result
+        assert worktree_result is not None
         assert worktree_result.status == TaskStatus.COMPLETED, worktree_result.error
         assert worktree_result.merge_status == "applied", worktree_result.model_dump()
         assert worktree_result.workspace_path == ""
@@ -202,11 +206,14 @@ async def main() -> None:
                 },
             },
             "worktree": {
+                "backend": workflow_result.backend.value,
                 "status": worktree_result.status.value,
                 "merge": worktree_result.merge_status,
                 "parent_verification": "passed",
                 "accepted": accepted.accepted,
                 "undo": "passed",
+                "metrics": measure_workflow(workflow_result).model_dump(mode="json"),
+                "trace": [stage.value for stage in workflow_result.trace],
             },
             "audit_entries": len(delegated_entries),
             "permission_prompts": len(prompts),

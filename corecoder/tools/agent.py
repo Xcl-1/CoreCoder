@@ -19,6 +19,7 @@ from ..delegation import (
     TaskStatus,
     WorkspaceMode,
 )
+from ..orchestration import WorkflowRequest
 from .base import Tool
 
 
@@ -250,7 +251,10 @@ class AgentTool(Tool):
                     "task_id": task_id,
                     "task": snapshot.model_dump(mode="json") if snapshot else None,
                 }, ensure_ascii=False, separators=(",", ":"))
-            result = await self._parent_agent.delegate(spec)
+            workflow = await self._parent_agent.run_workflow(WorkflowRequest(task=spec))
+            result = workflow.final_task_result
+            if result is None:
+                return workflow.model_dump_json()
             if review and task_role == TaskRole.EXECUTOR and result.status == TaskStatus.COMPLETED:
                 review_text = await self._parent_agent._review(result.summary, task)
                 result = result.model_copy(

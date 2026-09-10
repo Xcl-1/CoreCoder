@@ -155,6 +155,32 @@ assert result.requires_parent_review
 # accepted = agent.accept_task(result.task_id, parent_verified_checks)
 ```
 
+CoreCoder 现在只向用户提供统一的 LangGraph 编排路径。Native 适配器仅作为内部兼容和评估基线保留：
+
+```bash
+pip install -e .
+corecoder
+```
+
+```python
+from corecoder import Agent, TaskSpec, WorkflowRequest
+
+agent = Agent(llm=llm)
+workflow = await agent.run_workflow(WorkflowRequest(
+    task=TaskSpec(objective="实现并验证受限范围内的改动"),
+    max_replans=1,
+    max_total_tokens=24_000,
+))
+```
+
+工作流固定为 `规划 -> 审批 -> 执行 -> 验证 -> 审查 -> 决策`。图本身拿不到工具或文件系统，实际执行仍然经过 `TaskController`；规划器可以细化指令，但不能扩大角色、工具、路径、预算、超时、验收条件或执行模式。策略违规和预算耗尽不会重试，写入型重试必须使用 worktree 隔离。无路径约束的高风险工具会在执行前中断，只有与当前任务摘要严格绑定的审批决定才能恢复。
+
+公共 Agent API 不再存在 Native 执行旁路。主 Agent 与子 Agent 的每一次 `chat()` 都经过 LangGraph turn 生命周期（`规划 -> 执行 -> 验证 -> 审查`）；前台委派、后台和 Durable 任务、批量委派以及团队阶段还会经过上面的受限任务图。原始模型/工具循环和控制器直接执行器只作为图节点内部回调，从而既避免递归，又保持唯一的用户执行路径。`agent.last_turn_workflow` 可用于查看最近一次对话的真实阶段轨迹。
+
+默认检查点只保存在内存中。需要进程重启后恢复时，库调用方可传入 `encrypted_sqlite_checkpointer(path, key=...)`；序列化类型采用严格白名单，AES 密钥只能是 16、24 或 32 字节。内置规划、验证和审查器刻意保持确定性：LangGraph 增强的是流程控制，不会自动提高模型智力。需要更强思考质量时，应注入相互独立的回调，并继续以父 Agent 实际运行的测试和验收结果为准。
+
+`measure_workflow()` 与 `summarize_workflows()` 会从结构化结果中统计成功率、重试、Token、耗时、工具调用、策略违规、报告测试和父 Agent 验收指标，因此可以对 Native 与 LangGraph 做 A/B 对照，而不必相信模型自行书写的结论。
+
 `agent.tasks.snapshot(task_id)`、`list_tasks()` 和 `events()` 提供有界且不含任务
 Prompt 的控制平面状态查询。任务生命周期事件同时写入现有 JSONL 审计日志，包含任务、
 父子 Agent、角色、权限范围和工作区身份。审计写入失败不会改变任务执行结果，内存中的
@@ -282,6 +308,7 @@ README 只给方向，每条的代码细节第七篇接着讲。挑一个动手�
 /diff            查看本次会话改过的文件
 /undo            撤销写入/编辑工具的修改（`/undo force` 强制覆盖冲突）
 /save  /sessions 手动检查点 / 列出全部会话
+/history [n]     查看全部历史 / 最近 n 轮
 /memory          查看跨会话记忆和待反思会话
 /memory show <id> / search <查询> / archive <id> / approve <id> / reflect
 /skills          列出内置、用户和项目 Skill
@@ -293,7 +320,7 @@ README 只给方向，每条的代码细节第七篇接着讲。挑一个动手�
 quit / exit      退出（Ctrl+C 取消当前回合）
 ```
 
-完整对话会在每轮结束后自动保存到 `~/.corecoder/sessions`；`/save` 可手动建立检查点，`/sessions` 列出全部历史会话，`corecoder -r <ID>` 可恢复续聊，并在交互模式下回显已保存的用户与助手消息。为保持终端清晰，历史工具结果默认隐藏。会话 ID 会先清洗成安全字符，恶意名称无法路径穿越。
+完整对话会在每轮结束后自动保存到 `~/.corecoder/sessions`；`/save` 可手动建立检查点，`/sessions` 列出全部历史会话，`corecoder -r <ID>` 可恢复续聊，并在交互模式下回显已保存的用户与助手消息。`/history` 可再次查看全部历史，`/history <n>` 只显示最近 n 轮。版本 2 会话文件使用独立展示记录，因此模型上下文压缩不会再删除原始对话；模型/工具消息单独保存，工具结果默认隐藏。旧版会话可兼容读取，并在下次保存时自动升级。会话 ID 会先清洗成安全字符，恶意名称无法路径穿越。
 
 `/undo` 会恢复当前 CoreCoder 进程中由 `write_file`、`edit_file` 或 `edit_ast` 修改文件的原始字节，并删除这些工具新建的文件；同一文件即使被多次编辑，也会回到第一次修改之前。如果文件在 Agent 最后一次写入后又被外部修改，普通撤销会将其保留并报告冲突；只有显式执行 `/undo force` 才会覆盖。撤销历史在 `/reset` 后仍保留，但不会跨进程或随恢复会话持久化。`bash` 产生的任意文件系统副作用无法可靠追踪，不在撤销保证范围内。
 
