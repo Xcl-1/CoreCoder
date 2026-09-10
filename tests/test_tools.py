@@ -39,6 +39,12 @@ def test_all_tools_declare_security_capabilities():
 
 # --- bash ---
 
+def test_bash_schema_requires_one_direct_command():
+    command = get_tool("bash").schema()["function"]["parameters"]["properties"]["command"]
+
+    assert command["pattern"] == r"^[^&;|<>]*$"
+    assert "existing workspace" in command["description"]
+
 @pytest.mark.asyncio
 async def test_bash_basic():
     bash = get_tool("bash")
@@ -367,6 +373,8 @@ def test_agent_tool_schema():
     assert "task_control" not in allowed
     assert "read_file" in allowed
     assert "multiple independent sub-tasks" in s["function"]["description"]
+    assert properties["token_budget"]["minimum"] == 8000
+    assert "16000 default" in properties["token_budget"]["description"]
 
 
 def test_task_control_tool_schema():

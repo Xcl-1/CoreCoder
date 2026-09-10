@@ -84,6 +84,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _FINALIZATION_EVIDENCE_CHARS = 24_000
+_BUDGET_FINAL_OUTPUT_TOKENS = 1_536
 _FINALIZATION_SYSTEM_PROMPT = (
     "You are a final-answer formatter, not an investigator. Use only the supplied "
     "user request and tool evidence. Do not inspect further, search for additional "
@@ -115,6 +116,18 @@ _ONLY_TOOL_PATTERNS = (
 _FORBIDDEN_TOOL_PATTERNS = (
     re.compile(r"(?:禁止|不得)(?:使用|调用)?\s*([^。；;\n]+)"),
     re.compile(r"(?:do\s+not\s+use|forbid(?:den)?)\s+([^.;\n]+)", re.IGNORECASE),
+)
+_UNDO_REQUEST_PATTERN = re.compile(
+    r"\b(?:undo|revert|rollback|roll\s+back)\b|"
+    r"\u64a4\u9500|\u56de\u6eda|\u56de\u9000|\u8fd8\u539f",
+    re.IGNORECASE,
+)
+_READ_ONLY_REQUEST_PATTERN = re.compile(
+    r"\bread[- ]only\b|"
+    r"\bwithout\s+(?:editing|modifying|writing|changing)\s+(?:any\s+)?(?:files|code)\b|"
+    r"\bdo\s+not\s+(?:edit|modify|write|change)\s+(?:any\s+)?(?:files|code)\b|"
+    r"\u53ea\u8bfb|(?:\u4e0d\u8981|\u4e0d\u5f97|\u7981\u6b62)(?:\u7f16\u8f91|\u4fee\u6539|\u5199\u5165)(?:\u6587\u4ef6|\u4ee3\u7801)",
+    re.IGNORECASE,
 )
 _POLICY_DIRECTIVE_BREAK = re.compile(
     r"(?:，|,)\s*(?=(?:必须|需要|请|然后|再|但|不过|禁止|不得|仅|只允许|"
@@ -267,18 +280,14 @@ class Agent:
         if any(isinstance(tool, AgentTool) for tool in self.tools):
             self._system += (
                 "\n\n# Dynamic sub-agent delegation\n"
-                "Decide whether delegation materially helps before calling the agent tool. "
-                "Handle simple or tightly coupled work yourself. For substantial independent "
-                "sub-tasks, issue one agent call per sub-task in the same response; the runtime "
+                "Keep simple or tightly coupled work local. For substantial independent "
+                "sub-tasks, issue one agent call per task in the same response; the runtime "
                 f"accepts at most {self.max_subagents_per_round} sub-agents from one response "
                 f"and runs at most {task_concurrency} concurrently. "
-                "Give every child the minimum context, role, tools, paths, budget, and concrete "
-                "acceptance criteria it needs. Never put bash, agent, task_control, or "
-                "undo_changes in a child's allowed_tools. Never give two concurrent children "
-                "overlapping "
-                "write ownership. Schedule dependent implementation or review only after the "
-                "prerequisite results return. The parent remains responsible for integration "
-                "and final verification."
+                "Give each child minimal context, role, allowed tools, paths, budget, and "
+                "acceptance criteria. Child tools never include bash, agent, task_control, or "
+                "undo. Concurrent children need disjoint write ownership. Schedule dependent "
+                "work later; the parent integrates and verifies."
             )
         self._step_number = 0
         self.guard = guard
@@ -301,6 +310,7 @@ class Agent:
         self._turn_allowed_tools: set[str] | None = None
         self._turn_forbidden_tools: set[str] = set()
         self._turn_read_scope: tuple[Path, ...] = ()
+        self._undo_requested = False
         self._active_skill_risk = "low"
         self._active_skill_ids: list[str] = []
         self._skill_tool_successes = 0
@@ -495,6 +505,13 @@ class Agent:
             system = f"{system}\n\n{self._memory_prompt}"
         if self._skill_prompt:
             system = f"{system}\n\n{self._skill_prompt}"
+        if self._turn_tool_available("bash"):
+            system += (
+                "\n\n# Active shell contract\n"
+                "Each bash call already runs in the workspace. Send exactly one direct "
+                "command: never prepend cd, chain commands with &&, ;, or |, or redirect "
+                "input/output. Use separate tool calls instead."
+            )
         runtime_events = [
             str(message.get("content", "")).strip()
             for message in self.messages
@@ -526,12 +543,9 @@ class Agent:
         self._turn_messages.append(deepcopy(message))
 
     def _tool_schemas(self) -> list[dict]:
-        forbidden = self._skill_forbidden_tools | self._turn_forbidden_tools
         schemas = []
         for tool in self.tools:
-            if tool.name in forbidden:
-                continue
-            if self._turn_allowed_tools is not None and tool.name not in self._turn_allowed_tools:
+            if not self._turn_tool_available(tool.name):
                 continue
             schema = tool.schema()
             if tool.name in _READ_TOOLS and self._turn_read_scope:
@@ -542,6 +556,26 @@ class Agent:
                 )
             schemas.append(schema)
         return schemas
+
+    def _turn_tool_available(self, name: str) -> bool:
+        forbidden = self._skill_forbidden_tools | self._turn_forbidden_tools
+        if name not in self._tool_by_name or name in forbidden:
+            return False
+        if self._turn_allowed_tools is not None and name not in self._turn_allowed_tools:
+            return False
+        # Progressive disclosure: task_control has no valid target until a
+        # task exists. Keep it out of ordinary requests, then expose it on the
+        # model round immediately following background delegation.
+        if name == "task_control" and not self._task_control_relevant():
+            return False
+        return name != "undo_changes" or self._undo_requested
+
+    def _task_control_relevant(self) -> bool:
+        if self._durable_queue is not None:
+            # An observer may need to inspect a durable task that has not yet
+            # been restored into this process's in-memory controller.
+            return True
+        return bool(self._background_workflows or self.tasks.list_tasks(limit=1))
 
     def _context_overhead_tokens(self) -> int:
         """Budget system additions, tool schemas, and reserved model output."""
@@ -610,6 +644,40 @@ class Agent:
             {"role": "system", "content": _FINALIZATION_SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ]
+
+    async def _request_finalization(
+        self,
+        on_token: Callable[[str], None] | None,
+        *,
+        max_output_tokens: int | None = None,
+    ) -> tuple[list[dict], Any]:
+        """Request a tool-free answer, optionally under a temporary output cap."""
+        messages = self._finalization_messages(self._turn_messages)
+        extra = getattr(self.llm, "extra", None)
+        missing = object()
+        previous: object = missing
+        if isinstance(extra, dict) and max_output_tokens is not None:
+            previous = extra.get("max_tokens", missing)
+            extra["max_tokens"] = max_output_tokens
+        try:
+            response = await asyncio.to_thread(
+                self.llm.chat,
+                messages=messages,
+                tools=None,
+                on_token=on_token,
+            )
+        finally:
+            if isinstance(extra, dict) and max_output_tokens is not None:
+                if previous is missing:
+                    extra.pop("max_tokens", None)
+                else:
+                    extra["max_tokens"] = previous
+        self._account_response_usage(response)
+        if response.tool_calls:
+            # No tools were offered. Never persist hallucinated calls without
+            # matching tool replies.
+            response = response.model_copy(update={"tool_calls": [], "content": ""})
+        return messages, response
 
     async def chat(self, user_input: str,
                    on_token: Callable[[str], None] | None = None,
@@ -709,6 +777,60 @@ class Agent:
             tool_schemas = self._tool_schemas()
             est_tokens = estimate_request_tokens(full_msgs, tools=tool_schemas)
 
+            if self._token_budget is not None and any(
+                message.get("role") == "tool" for message in self._turn_messages
+            ):
+                used = self._prompt_tokens_used + self._completion_tokens_used
+                remaining = self._token_budget - used
+                finalization_estimate = estimate_tokens(
+                    self._finalization_messages(self._turn_messages)
+                )
+                if remaining < est_tokens + 128:
+                    if remaining < finalization_estimate + 64:
+                        self._budget_exceeded = True
+                        answer = (
+                            "Error: delegated task token budget exhausted "
+                            f"({used}/{self._token_budget}); insufficient reserve "
+                            "for a grounded final answer."
+                        )
+                        self._append_message({"role": "assistant", "content": answer})
+                        self._record_skill_outcome("failure")
+                        return answer
+                    self._step_number += 1
+                    recovery_start = time.monotonic()
+                    output_cap = min(
+                        _BUDGET_FINAL_OUTPUT_TOKENS,
+                        max(64, remaining - finalization_estimate),
+                    )
+                    recovery_messages, recovery = await self._request_finalization(
+                        on_token,
+                        max_output_tokens=output_cap,
+                    )
+                    if incomplete_answer(recovery.content) or recovery.finish_reason in {
+                        "length", "content_filter",
+                    }:
+                        reason = recovery.finish_reason or "unknown"
+                        recovery = recovery.model_copy(update={
+                            "content": (
+                                "Error: the model produced no final answer "
+                                f"within the task token budget (finish_reason={reason})."
+                            ),
+                            "reasoning_content": "",
+                        })
+                    self._append_message(recovery.message)
+                    self._log_step(
+                        self._step_number,
+                        len(recovery_messages),
+                        finalization_estimate,
+                        recovery,
+                        [],
+                        recovery_start,
+                    )
+                    self._record_skill_outcome(
+                        "failure" if recovery.content.startswith("Error:") else self._skill_outcome()
+                    )
+                    return recovery.content
+
             resp = await asyncio.to_thread(
                 self.llm.chat,
                 messages=full_msgs,
@@ -733,20 +855,9 @@ class Agent:
                     # returning an empty string.
                     self._log_step(self._step_number, len(full_msgs), est_tokens,
                                    resp, [], step_start)
-                    recovery_messages = self._finalization_messages(self._turn_messages)
                     self._step_number += 1
                     recovery_start = time.monotonic()
-                    recovery = await asyncio.to_thread(
-                        self.llm.chat,
-                        messages=recovery_messages,
-                        tools=None,
-                        on_token=on_token,
-                    )
-                    self._account_response_usage(recovery)
-                    if recovery.tool_calls:
-                        # No tools were offered for finalization. Never persist
-                        # hallucinated calls without matching tool replies.
-                        recovery = recovery.model_copy(update={"tool_calls": [], "content": ""})
+                    recovery_messages, recovery = await self._request_finalization(on_token)
                     if incomplete_answer(recovery.content) or recovery.finish_reason in {"length", "content_filter"}:
                         reason = recovery.finish_reason or resp.finish_reason or "unknown"
                         recovery = recovery.model_copy(update={
@@ -1080,6 +1191,7 @@ class Agent:
         self._turn_allowed_tools = None
         self._turn_forbidden_tools.clear()
         self._turn_read_scope = ()
+        self._undo_requested = False
         if self.skills is not None:
             self.skills.clear_pins()
         self.session_id = self._new_session_id()
@@ -1114,6 +1226,11 @@ class Agent:
             user_input, _FORBIDDEN_TOOL_PATTERNS, known_tools
         )
         self._turn_read_scope = self._read_scope_in_request(user_input)
+        self._undo_requested = _UNDO_REQUEST_PATTERN.search(user_input) is not None
+        if _READ_ONLY_REQUEST_PATTERN.search(user_input):
+            self._turn_forbidden_tools.update({
+                "bash", "write_file", "edit_file", "edit_ast", "undo_changes",
+            })
 
     @staticmethod
     def _tool_names_in_clauses(

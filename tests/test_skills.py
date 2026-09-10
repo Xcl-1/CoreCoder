@@ -605,6 +605,37 @@ def test_builtin_architecture_skill_understands_natural_repository_request(tmp_p
     assert result.signature.actions == {"understand"}
 
 
+def test_generic_function_implementation_prefers_feature_fallback(tmp_path):
+    manager = SkillManager.create(project_path=tmp_path, user_dir=tmp_path / "user")
+    result = manager.route(
+        (
+            "Implement word_frequencies in text_utils.py according to its docstring. "
+            "Do not modify the tests. Run or reason through edge cases, then report "
+            "what you verified."
+        ),
+        {"read_file", "grep", "glob", "bash", "write_file", "edit_file", "edit_ast"},
+    )
+
+    assert result.selected_ids == ["coding.feature-implementation"]
+    assert result.decision == "auto"
+    logging = next(
+        candidate
+        for candidate in result.candidates
+        if candidate.skill.manifest.id == "reliability.logging-observability"
+    )
+    assert "specialist matched only a generic action" in logging.reasons
+
+
+def test_specialized_logging_request_still_routes_to_observability(tmp_path):
+    manager = SkillManager.create(project_path=tmp_path, user_dir=tmp_path / "user")
+    result = manager.route(
+        "Add structured logs and latency metrics to this request path",
+        {"read_file", "grep", "glob", "bash", "write_file", "edit_file"},
+    )
+
+    assert result.selected_ids == ["reliability.logging-observability"]
+
+
 def test_excluding_review_does_not_activate_an_action_mismatched_skill(tmp_path):
     manager = SkillManager.create(project_path=tmp_path, user_dir=tmp_path / "user")
     result = manager.route(
@@ -777,6 +808,49 @@ def test_router_ignores_language_names_inside_file_paths(tmp_path):
         "只读审查 D:\\develop\\Project\\Python\\CoreCoder\\corecoder\\skills\\router.py，检查边界条件。",
         {"read_file", "grep", "glob", "bash"},
     )
+    assert result.selected_ids == ["coding.code-review"]
+
+
+def test_router_does_not_treat_constant_components_as_user_actions(tmp_path):
+    manager = SkillManager.create(project_path=tmp_path, user_dir=tmp_path / "user")
+
+    result = manager.route(
+        "Find the unique RELEASE_MARKER in the files in this workspace and report its "
+        "complete value. Use the grep tool so the answer is grounded in file evidence.",
+        {"read_file", "grep", "glob", "bash"},
+    )
+
+    assert result.decision == "abstain"
+    assert "release" not in result.signature.actions
+    assert "release.package-publishing" not in result.selected_ids
+
+
+def test_explicit_delegation_routes_each_child_instead_of_the_parent(tmp_path):
+    manager = SkillManager.create(project_path=tmp_path, user_dir=tmp_path / "user")
+    query = (
+        "Use the agent tool to delegate two independent read-only investigations: "
+        "inspect alpha/component.txt and beta/component.txt, then combine findings."
+    )
+
+    result = manager.route(
+        query,
+        {"agent", "read_file", "grep", "glob", "bash"},
+    )
+
+    assert result.decision == "abstain"
+    assert result.selected_ids == []
+    assert any("explicit orchestration request" in reason for reason in result.rejected)
+
+
+def test_explicit_skill_pin_is_preserved_for_delegation_request(tmp_path):
+    manager = SkillManager.create(project_path=tmp_path, user_dir=tmp_path / "user")
+
+    result = manager.route(
+        "Use $coding.code-review and delegate a read-only review.",
+        {"agent", "read_file", "grep", "glob"},
+    )
+
+    assert result.decision == "explicit"
     assert result.selected_ids == ["coding.code-review"]
 
 

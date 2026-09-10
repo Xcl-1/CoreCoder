@@ -19,10 +19,8 @@ class TaskControlTool(Tool):
     network_access = "none"
     declared_risk = "medium"
     description = (
-        "Inspect, wait for, or cancel a background sub-agent task owned by this "
-        "parent. Use list/status/result to inspect without changing execution; "
-        "events long-polls bounded structured progress from a resumable cursor; "
-        "wait has a waiter-only timeout; cancel explicitly stops the task."
+        "List, inspect, wait for, or cancel this parent's background tasks. "
+        "events returns cursor-based progress; wait timeouts do not stop the task."
     )
     parameters = {
         "type": "object",
@@ -30,28 +28,28 @@ class TaskControlTool(Tool):
             "action": {
                 "type": "string",
                 "enum": ["list", "status", "result", "events", "wait", "cancel"],
-                "description": "Control-plane operation to perform.",
+                "description": "Operation.",
             },
             "task_id": {
                 "type": "string",
-                "description": "Required for every action except list.",
+                "description": "Required except for list.",
             },
             "timeout_seconds": {
                 "type": "number",
                 "exclusiveMinimum": 0,
                 "maximum": 300,
-                "description": "For wait/events; never changes the task deadline.",
+                "description": "Wait/events timeout; does not stop the task.",
             },
             "after_sequence": {
                 "type": "integer",
                 "minimum": 0,
-                "description": "For events; return progress after this resumable cursor.",
+                "description": "Events cursor.",
             },
             "limit": {
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 100,
-                "description": "Maximum snapshots returned by list.",
+                "description": "Maximum list size.",
             },
         },
         "required": ["action"],

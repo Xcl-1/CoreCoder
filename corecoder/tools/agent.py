@@ -25,20 +25,10 @@ class AgentTool(Tool):
     network_access = "delegated"
     declared_risk = "medium"
     description = (
-        "Delegate one substantial, well-scoped sub-task to an independent child agent. "
-        "The main agent decides whether delegation is useful and how many children are needed: "
-        "do not delegate simple work; for multiple independent sub-tasks, issue multiple agent "
-        "tool calls in the same response so they can run concurrently. Submit dependent work "
-        "in a later response after its prerequisites return. "
-        "The parent task controller gives the child an independent context, "
-        "bounded tools, paths, tokens, calls and runtime. Use this for: "
-        "researching a codebase, implementing a multi-step change in isolation, "
-        "or any task that would benefit from a fresh context window. "
-        "Set background=true to receive a task id immediately, then use "
-        "task_control to inspect, wait for, or cancel it. "
-        "Set the 'role' to 'researcher' for read-only exploration, "
-        "'executor' for making changes, or 'reviewer' to check changes. "
-        "Delegate a reviewer explicitly after the implementation result is available."
+        "Delegate one substantial independent sub-task with bounded tools, paths, "
+        "tokens, calls, and runtime. Issue multiple independent sub-tasks together; "
+        "wait before delegating dependent work. Keep simple or tightly coupled work local. "
+        "Use background=true with task_control for asynchronous work."
     )
     parameters = {
         "type": "object",
@@ -50,15 +40,15 @@ class AgentTool(Tool):
             "role": {
                 "type": "string",
                 "enum": ["executor", "researcher", "reviewer"],
-                "description": "Sub-agent role. executor=make changes, researcher=explore only, reviewer=check code. Default: executor.",
+                "description": "executor edits; researcher/reviewer are read-only.",
             },
             "background": {
                 "type": "boolean",
-                "description": "Schedule this child and return its task id without waiting.",
+                "description": "Return a task id without waiting.",
             },
             "durable": {
                 "type": "boolean",
-                "description": "Encrypt and persist this background TaskSpec for crash recovery.",
+                "description": "Persist an encrypted background task for recovery.",
             },
             "allowed_tools": {
                 "type": "array",
@@ -75,8 +65,7 @@ class AgentTool(Tool):
                     ],
                 },
                 "description": (
-                    "Exact child tool allowlist. Never include bash, agent, task_control, "
-                    "or undo_changes; delegated children cannot use unscoped tools."
+                    "Exact allowlist; bash, agent, task_control and undo are invalid."
                 ),
             },
             "read_paths": {
@@ -91,41 +80,44 @@ class AgentTool(Tool):
             },
             "context": {
                 "type": "string",
-                "description": "Minimal task-specific context; do not copy the full conversation.",
+                "description": "Minimal task-specific context.",
             },
             "acceptance_criteria": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Concrete conditions the parent will independently verify.",
+                "description": "Conditions the parent will verify.",
             },
             "token_budget": {
                 "type": "integer",
-                "minimum": 256,
+                "minimum": 8000,
                 "maximum": 1000000,
-                "description": "Maximum reported tokens before the child is stopped.",
+                "description": (
+                    "Child token limit. Omit for the 16000 default; use at least 8000 "
+                    "even for one bounded read."
+                ),
             },
             "max_tool_calls": {
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 1000,
-                "description": "Maximum child tool calls.",
+                "description": "Child tool-call limit.",
             },
             "timeout_seconds": {
                 "type": "number",
                 "exclusiveMinimum": 0,
                 "maximum": 3600,
-                "description": "Wall-clock timeout for the task.",
+                "description": "Task timeout.",
             },
             "execution_mode": {
                 "type": "string",
                 "enum": ["fork", "worktree"],
-                "description": "Shared fork workspace or isolated Git worktree.",
+                "description": "Shared fork or isolated Git worktree.",
             },
             "max_retries": {
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 3,
-                "description": "Automatic retries; allowed only for read-only scoped tasks.",
+                "description": "Retries for read-only tasks.",
             },
         },
         "required": ["task"],

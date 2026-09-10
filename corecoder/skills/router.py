@@ -38,6 +38,15 @@ _RELATIVE_PATH_RE = re.compile(
     r"(?<![a-z0-9_.@~+-])(?:[a-z0-9_.@~+-]+[\\/])+[a-z0-9_.@~+-]+",
     re.IGNORECASE,
 )
+_CONSTANT_IDENTIFIER_RE = re.compile(
+    r"(?<![\w$])[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+(?!\w)"
+)
+_ORCHESTRATION_REQUEST_RE = re.compile(
+    r"\bdelegat(?:e|es|ed|ing|ion)\b|"
+    r"\b(?:use|call|invoke)\s+(?:the\s+)?agent\s+tool\b|"
+    r"\u59d4\u6d3e|\u59d4\u6258|\u5b50(?:agent|\u4ee3\u7406)",
+    re.IGNORECASE,
+)
 _SIGNATURE_WEIGHTS = {
     "domains": 0.08,
     "actions": 0.14,
@@ -48,6 +57,8 @@ _SIGNATURE_WEIGHTS = {
     "contexts": 0.10,
 }
 _ACTION_MISMATCH_PENALTY = 0.18
+_ACTION_ONLY_SPECIALIST_PENALTY = 0.12
+_UNSTRUCTURED_SPECIALIST_PENALTY = 0.08
 _CONFIDENCE_SCALE = 5.0
 
 
@@ -153,6 +164,14 @@ class SkillRouter:
             kept.append(candidate)
         candidates = kept
         rejected.extend(recall_rejected)
+
+        # Delegation is a parent-level execution request, not evidence that the
+        # parent should activate a domain workflow inferred from a child's verb
+        # (for example, "inspect" becoming Code Review). Each child routes its
+        # own bounded objective independently. Explicit $skill pins still win.
+        if not explicit_ids and _ORCHESTRATION_REQUEST_RE.search(routing_query):
+            candidates = []
+            rejected.append("implicit skills suppressed for explicit orchestration request")
 
         explicit_unavailable = bool(
             explicit_ids and not any(candidate.explicit for candidate in candidates)
@@ -406,6 +425,31 @@ class SkillRouter:
             ):
                 score -= _ACTION_MISMATCH_PENALTY
                 reasons.append("structured action mismatch")
+
+            # A specialist must match more than a generic verb such as
+            # "implement", "add", or "review". Otherwise broad action lists
+            # let unrelated specialists outrank the general workflow that was
+            # explicitly designed as the fallback for that action.
+            if (
+                not explicit
+                and requested_actions
+                and matched_dimensions == ["actions"]
+                and not manifest.routing.generic_fallback
+            ):
+                score -= _ACTION_ONLY_SPECIALIST_PENALTY
+                reasons.append("specialist matched only a generic action")
+
+            if (
+                not explicit
+                and manifest.schema_version >= 2
+                and not matched_dimensions
+                and not matched_tags
+                and not matched_intents
+                and not matched_aliases
+                and not matched_boundaries
+            ):
+                score -= _UNSTRUCTURED_SPECIALIST_PENALTY
+                reasons.append("no structured intent or boundary match")
 
             if explicit:
                 score += 10.0
@@ -807,10 +851,11 @@ class SkillRouter:
 
     @staticmethod
     def _without_paths(query: str) -> str:
-        """Remove path components so directory names do not activate skills."""
+        """Remove paths and constant names so identifiers do not activate skills."""
         without_windows_paths = _WINDOWS_PATH_RE.sub(" ", query)
         without_delimited_paths = _DELIMITED_PATH_RE.sub(" ", without_windows_paths)
-        return _RELATIVE_PATH_RE.sub(" ", without_delimited_paths)
+        without_relative_paths = _RELATIVE_PATH_RE.sub(" ", without_delimited_paths)
+        return _CONSTANT_IDENTIFIER_RE.sub(" ", without_relative_paths)
 
     def _explicit_ids(self, query: str) -> set[str]:
         """Extract explicit skill references without treating shell variables as skills."""

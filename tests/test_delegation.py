@@ -664,6 +664,25 @@ async def test_agent_and_task_control_tools_manage_background_task():
 
 
 @pytest.mark.asyncio
+async def test_task_control_schema_is_disclosed_after_a_task_exists():
+    agent = Agent(llm=_ReportLLM(), tools=ALL_TOOLS, replay=False, agent_id="main")
+
+    initial_tools = {
+        schema["function"]["name"] for schema in agent._tool_schemas()
+    }
+    assert "agent" in initial_tools
+    assert "task_control" not in initial_tools
+
+    task_id = await agent.submit_task(TaskSpec(objective="progressive tool schema"))
+    await agent.wait_task(task_id, timeout=1)
+
+    later_tools = {
+        schema["function"]["name"] for schema in agent._tool_schemas()
+    }
+    assert "task_control" in later_tools
+
+
+@pytest.mark.asyncio
 async def test_role_authority_is_intersected_with_parent_tools():
     llm = _ReportLLM()
     agent = Agent(llm=llm, tools=[], replay=False, agent_id="main")

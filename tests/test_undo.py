@@ -25,6 +25,21 @@ def _agent(*tool_names: str) -> Agent:
     )
 
 
+@pytest.mark.parametrize("query", ["undo the changes", "revert this edit", "\u64a4\u9500\u4fee\u6539"])
+def test_undo_schema_is_only_disclosed_for_explicit_requests(query):
+    agent = _agent("undo_changes", "read_file")
+
+    assert "undo_changes" not in {
+        schema["function"]["name"] for schema in agent._tool_schemas()
+    }
+
+    agent._load_turn_policy(query)
+
+    assert "undo_changes" in {
+        schema["function"]["name"] for schema in agent._tool_schemas()
+    }
+
+
 @pytest.mark.asyncio
 async def test_undo_restores_original_after_multiple_edits(tmp_path):
     path = tmp_path / "sample.py"

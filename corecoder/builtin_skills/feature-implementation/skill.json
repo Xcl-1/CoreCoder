@@ -51,6 +51,10 @@
       "features",
       "capability",
       "command",
+      "function",
+      "method",
+      "docstring",
+      "stub",
       "功能"
     ],
     "artifacts": [
@@ -78,6 +82,8 @@
   "examples": {
     "positive": [
       "Add export support to this command",
+      "Implement this function according to its docstring",
+      "Complete the missing implementation in this source file",
       "为这个命令增加导出功能"
     ],
     "negative": [
@@ -120,6 +126,7 @@
   },
   "routing": {
     "allow_implicit": true,
+    "generic_fallback": true,
     "risk": "medium",
     "rollout_percent": 100
   },

@@ -407,6 +407,23 @@ The `read_file` and `grep` tools block live `.env`, credential directories, and 
 
 DeepSeek message preparation preserves returned reasoning and supplies an empty reasoning field for synthetic assistant messages. Compression preserves the current request. An empty, truncated, or handoff-only answer gets one bounded finalization attempt; an unsuccessful retry remains incomplete. Run offline regressions with `python -m pytest -q`; the synthetic live-provider test is opt-in via `CORECODER_LIVE_TESTS=1` and `python -m pytest -q tests/test_provider_live.py`, using the configured DeepSeek endpoint without sending project content.
 
+## Whole-Agent evaluation
+
+`corecoder-eval` runs versioned JSON suites in fresh temporary workspaces and grades externally observable facts rather than trusting the Agent's completion claim. The bundled suite covers exact reasoning, evidence retrieval, debugging, feature implementation, repository comprehension, prompt-injection resistance, controlled multi-Agent delegation, and cross-turn context retention:
+
+```bash
+corecoder-eval builtin \
+  --repeat 3 \
+  --allow-agent-shell \
+  --output evaluation-report.json
+```
+
+The JSON report includes overall and per-category scores, pass rate, repeated-run reliability, correctness, completion, safety, efficiency, latency, tokens, estimated cost, tool calls, policy violations, and evidence for every check. `--fail-under 0.85` overrides the suite gate and makes the command exit non-zero below it. Agent memory is disabled between runs for reproducibility; built-in and fixture-local Skills remain enabled unless `--no-skills` is passed.
+
+Use `--task implement-feature` to rerun one task while tuning; repeat `--task` to select several task IDs.
+
+By default, network access and Agent shell commands that require confirmation fail closed. `--allow-agent-shell` admits only non-high-risk local shell confirmations; explicit network, credential-bearing, mutating-network, redirecting, and high-risk requests remain denied. Grader commands declared in a suite are executed directly, so only run suites you trust. Use `--keep-workspaces` to preserve failed-task artifacts for diagnosis.
+
 ## Related Projects
 
 If working through CoreCoder was useful, here are a few other tools I've built around agents and LLM systems:

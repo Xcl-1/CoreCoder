@@ -305,6 +305,45 @@ def test_explicit_turn_policy_filters_tools_and_describes_read_scope(tmp_path, m
     ) == (tmp_path / "corecoder", tmp_path / "tests")
 
 
+def test_global_read_only_request_keeps_delegation_but_removes_dynamic_tools():
+    agent = Agent(
+        llm=ScriptedLLM(),
+        tools=[
+            get_tool("agent"),
+            get_tool("read_file"),
+            get_tool("grep"),
+            get_tool("bash"),
+            get_tool("write_file"),
+            get_tool("edit_file"),
+            get_tool("edit_ast"),
+            get_tool("undo_changes"),
+        ],
+        replay=False,
+    )
+
+    agent._load_turn_policy(
+        "Delegate two independent read-only investigations. Do not edit files."
+    )
+    names = {schema["function"]["name"] for schema in agent._tool_schemas()}
+
+    assert {"agent", "read_file", "grep"} <= names
+    assert not {"bash", "write_file", "edit_file", "edit_ast", "undo_changes"} & names
+
+
+def test_scoped_test_protection_does_not_make_implementation_read_only():
+    agent = Agent(
+        llm=ScriptedLLM(),
+        tools=[get_tool("bash"), get_tool("edit_file"), get_tool("write_file")],
+        replay=False,
+    )
+
+    agent._load_turn_policy("Implement the function, but do not modify the tests.")
+
+    assert {schema["function"]["name"] for schema in agent._tool_schemas()} == {
+        "bash", "edit_file", "write_file",
+    }
+
+
 def test_turn_policy_stops_at_new_directive_in_same_sentence():
     agent = Agent(
         llm=ScriptedLLM(),

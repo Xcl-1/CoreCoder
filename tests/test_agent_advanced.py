@@ -5,7 +5,7 @@ import pytest
 
 from corecoder.agent import Agent, AgentRole, role_prompt, role_tools
 from corecoder.llm import LLM
-from corecoder.models import LLMResponse
+from corecoder.models import LLMResponse, ToolCall
 from corecoder.tools import ALL_TOOLS
 
 # --- Role system ---------------------------------------------------------
@@ -134,6 +134,57 @@ def test_finalization_messages_bound_large_tool_evidence():
     prompt = recovery[1]["content"]
     assert "tool evidence truncated for finalization" in prompt
     assert len(prompt) < 25_000
+
+
+@pytest.mark.asyncio
+async def test_token_budget_reserves_a_compact_grounded_final_answer(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "evidence.txt").write_text("MARKER=cedar-4821\n", encoding="utf-8")
+
+    class _BudgetLLM:
+        def __init__(self):
+            self.extra = {"max_tokens": 4096}
+            self.calls = []
+            self.responses = [
+                LLMResponse(
+                    tool_calls=[ToolCall(
+                        id="grep-1",
+                        name="grep",
+                        arguments={"pattern": "MARKER", "path": "."},
+                    )],
+                    prompt_tokens=800,
+                    completion_tokens=50,
+                ),
+                LLMResponse(
+                    content="The exact value is cedar-4821.",
+                    prompt_tokens=100,
+                    completion_tokens=20,
+                ),
+            ]
+
+        def chat(self, messages, tools=None, on_token=None):
+            self.calls.append({
+                "messages": messages,
+                "tools": tools,
+                "max_tokens": self.extra["max_tokens"],
+            })
+            return self.responses.pop(0)
+
+    llm = _BudgetLLM()
+    agent = Agent(
+        llm=llm,
+        tools=[next(tool for tool in ALL_TOOLS if tool.name == "grep")],
+        replay=False,
+        token_budget=1_300,
+    )
+
+    answer = await agent.chat("Find MARKER with grep and report its value.")
+
+    assert answer == "The exact value is cedar-4821."
+    assert llm.calls[1]["tools"] is None
+    assert 64 <= llm.calls[1]["max_tokens"] <= 1_536
+    assert llm.extra["max_tokens"] == 4096
+    assert agent._prompt_tokens_used + agent._completion_tokens_used <= 1_300
 
 
 @pytest.mark.asyncio

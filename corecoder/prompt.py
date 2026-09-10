@@ -11,21 +11,7 @@ def system_prompt(
     working_directory: str | None = None,
 ) -> str:
     cwd = working_directory or os.getcwd()
-    tool_list = "\n".join(f"- **{t.name}**: {t.description}" for t in tools)
     uname = platform.uname()
-    if uname.system.casefold() == "windows":
-        shell_runtime = (
-            "The `bash` tool name is historical: on this host it runs commands through "
-            "Windows `cmd.exe` by default. Use Windows-native commands such as `dir`, "
-            "not POSIX-only commands such as `ls`; do not use `/dev/null`. Invoke "
-            "PowerShell explicitly only when its syntax is needed. Avoid command chaining "
-            "and redirection when separate tool calls can do the job."
-        )
-    else:
-        shell_runtime = (
-            "The `bash` tool runs through the host's POSIX shell. Use POSIX-compatible "
-            "commands and paths unless another shell is invoked explicitly."
-        )
 
     return f"""\
 You are CoreCoder, an AI coding assistant running in the user's terminal.
@@ -36,10 +22,10 @@ You help with software engineering: writing code, fixing bugs, refactoring, expl
 - Working directory: {cwd}
 - OS: {uname.system} {uname.release} ({uname.machine})
 - Python: {platform.python_version()}
-- Shell runtime: {shell_runtime}
 
 # Tools
-{tool_list}
+The tool schemas supplied with the current request are the authoritative list of
+available tools and their arguments. Use only those tools.
 
 # Rules
 1. **Read before edit.** Always read a file before modifying it.

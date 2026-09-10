@@ -33,15 +33,23 @@ class BashTool(Tool):
     network_access = "dynamic"
     declared_risk = "medium"
     description = (
-        "Execute a shell command. Returns stdout, stderr, and exit code. "
-        "Use this for running tests, installing packages, git operations, etc."
+        "Execute a host-shell command and return stdout, stderr, and exit code. "
+        "The command already runs in the workspace: never prepend cd, chain commands, "
+        "or redirect output. "
+        "On Windows this uses cmd.exe: prefer native commands such as dir, avoid "
+        "POSIX-only ls and /dev/null, and invoke PowerShell explicitly when needed. "
+        "On other hosts use POSIX syntax."
     )
     parameters = {
         "type": "object",
         "properties": {
             "command": {
                 "type": "string",
-                "description": "The shell command to run",
+                "pattern": r"^[^&;|<>]*$",
+                "description": (
+                    "One direct command in the existing workspace. Do not use cd or "
+                    "shell operators &, ;, |, <, or >."
+                ),
             },
             "timeout": {
                 "type": "integer",

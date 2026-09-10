@@ -383,19 +383,42 @@ def test_system_prompt_forbids_unrequested_permission_bypass():
     assert "only when the user explicitly requests it" in prompt
 
 
-def test_system_prompt_gives_windows_native_shell_guidance(monkeypatch):
+def test_system_prompt_does_not_duplicate_tool_schema_descriptions():
+    tool = get_tool("agent")
+    prompt = system_prompt([tool])
+
+    assert tool.description not in prompt
+    assert "tool schemas supplied with the current request" in prompt
+
+
+def test_bash_schema_gives_windows_native_shell_guidance(monkeypatch):
     monkeypatch.setattr(
         "corecoder.prompt.platform.uname",
         lambda: SimpleNamespace(system="Windows", release="11", machine="AMD64"),
     )
 
     prompt = system_prompt([])
+    description = get_tool("bash").schema()["function"]["description"]
 
-    assert "Windows `cmd.exe`" in prompt
-    assert "`dir`" in prompt
-    assert "do not use `/dev/null`" in prompt
+    assert "Windows" in description and "cmd.exe" in description
+    assert "dir" in description
+    assert "/dev/null" in description
+    assert "already runs in the workspace" in description
+    assert "never prepend cd" in description
+    assert "bash" not in prompt
     assert "Guard policy decision" in prompt
     assert 'Use "Docker sandbox" only' in prompt
+
+
+def test_shell_contract_is_injected_only_when_bash_is_available():
+    agent = Agent(llm=LLM.__new__(LLM), tools=[], replay=False)
+    assert "Active shell contract" not in agent._full_messages()[0]["content"]
+
+    agent = Agent(llm=LLM.__new__(LLM), tools=[get_tool("bash")], replay=False)
+    assert "Each bash call already runs in the workspace" in agent._full_messages()[0]["content"]
+
+    agent._skill_forbidden_tools.add("bash")
+    assert "Active shell contract" not in agent._full_messages()[0]["content"]
 
 
 def test_guard_frequency_throttle():

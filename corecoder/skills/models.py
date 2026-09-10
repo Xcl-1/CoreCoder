@@ -181,6 +181,7 @@ class SkillRoutingPolicy(BaseModel):
     """Invocation and rollout policy kept out of executable instructions."""
 
     allow_implicit: bool = True
+    generic_fallback: bool = False
     risk: SkillRisk = "low"
     rollout_percent: int = Field(default=100, ge=0, le=100)
 

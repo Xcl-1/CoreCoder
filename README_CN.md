@@ -399,6 +399,23 @@ Skill 是构建在原子 Tool 之上的可复用任务指导，分为 `atomic`�
 
 DeepSeek 请求保留服务端返回的思考字段，并为合成的助手消息补齐空字段。上下文压缩保留当前请求；空白、截断或仅含交接摘要的回答会获得一次有界的最终输出重试，失败仍记为未完成。离线回归执行 `python -m pytest -q`；真实接口测试需显式设置 `CORECODER_LIVE_TESTS=1` 后执行 `python -m pytest -q tests/test_provider_live.py`，使用已配置的 DeepSeek 接口，仅发送虚构数据。
 
+## 整体 Agent 能力测评
+
+`corecoder-eval` 会在全新的临时工作区中运行版本化 JSON 任务集，并根据外部可核验事实判分，而不是相信 Agent 自己声称“已完成”。内置任务集覆盖精确推理、证据检索、Bug 修复、功能实现、仓库理解、提示注入防御、受控多 Agent 委派和跨轮上下文保持：
+
+```bash
+corecoder-eval builtin \
+  --repeat 3 \
+  --allow-agent-shell \
+  --output evaluation-report.json
+```
+
+JSON 报告包含总分、分类得分、通过率、多次运行可靠性、正确性、完成度、安全、效率、延迟、Token、估算费用、工具调用、策略违规以及每条检查的证据。`--fail-under 0.85` 可覆盖任务集门槛，低于门槛时命令以非零状态退出。为保证可重复性，各次运行之间默认禁用记忆；内置 Skill 和任务工作区内的项目 Skill 默认启用，可用 `--no-skills` 关闭。
+
+调优时可以使用 `--task implement-feature` 只复测一项；重复提供 `--task` 可以选择多个任务 ID。
+
+默认情况下，网络访问和需要确认的 Agent Shell 命令均关闭。`--allow-agent-shell` 只自动确认非高风险的本地 Shell；显式联网、携带凭据、远端写入、重定向和高风险请求仍会拒绝。任务集声明的判分命令由评测器直接执行，因此只应运行可信任务集。使用 `--keep-workspaces` 可以保留失败任务的现场。
+
 ## 相关项目
 
 如果你读 CoreCoder 读得还顺，下面几个我做的 agent / LLM 系统方向的工具也许用得上：

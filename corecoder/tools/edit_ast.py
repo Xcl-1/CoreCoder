@@ -29,38 +29,28 @@ class EditASTTool(Tool):
     network_access = "none"
     declared_risk = "medium"
     description = (
-        "Edit Python code using AST-aware operations. "
-        "Safer than edit_file for structural changes like renaming functions "
-        "across a file or replacing a function body without breaking indentation. "
-        "Supports: rename_function, replace_function, insert_after."
+        "Structurally edit Python code: rename a function, replace its body, "
+        "or insert code after a function/class."
     )
     parameters = {
         "type": "object",
         "properties": {
             "file_path": {
                 "type": "string",
-                "description": "Path to the Python file to edit",
+                "description": "Python file path.",
             },
             "operation": {
                 "type": "string",
                 "enum": ["rename_function", "replace_function", "insert_after"],
-                "description": "The AST operation to perform",
+                "description": "AST operation.",
             },
             "target": {
                 "type": "string",
-                "description": (
-                    "Target identifier. For rename_function: old function name. "
-                    "For replace_function: function name to replace body of. "
-                    "For insert_after: function/class name to insert after."
-                ),
+                "description": "Target function/class name.",
             },
             "new_text": {
                 "type": "string",
-                "description": (
-                    "For rename_function: the new function name. "
-                    "For replace_function: the new function body (indented). "
-                    "For insert_after: the code to insert."
-                ),
+                "description": "New name, replacement body, or inserted code.",
             },
         },
         "required": ["file_path", "operation", "target", "new_text"],
