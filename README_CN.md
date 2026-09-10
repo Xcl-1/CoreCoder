@@ -133,7 +133,9 @@ def chat(self, user_input):
 
 超大工具结果会在第一次进入历史前外置化。对话只保留稳定的摘要预览和 `artifact://sha256/...` 引用；只读工具 `retrieve_context` 可以按关键词或行范围恢复原始证据。达到摘要水位后，旧对话会变成经过 Schema 校验的 JSON 检查点，明确记录当前目标、约束、决策、文件、验证结果、错误、待办和 artifact 引用。检查点带版本号，只有回落到低水位或积累了足量新消息后才允许再次更新，使两次压缩之间的 Prompt Cache 前缀保持稳定。设置 `CORECODER_CONTEXT_ARTIFACTS=0` 可关闭外置存储；`CORECODER_CONTEXT_ARTIFACTS_DIR` 和 `CORECODER_CONTEXT_ARTIFACT_THRESHOLD` 分别控制存储目录与默认 12,000 字符阈值。`CORECODER_CONTEXT_ARTIFACT_TTL_DAYS`（默认 30 天）和 `CORECODER_CONTEXT_ARTIFACT_MAX_MB`（默认 256 MB）限制保留周期与总容量；系统先清理过期项，再按最旧优先释放容量。`/tokens` 会在 Provider 支持时显示 Prompt Cache 命中/未命中用量，并显示外置、检索、清理、压缩和检查点指标。
 
-**子 agent 现在统一运行在主 agent 持有的控制平面之后。** 每次委派都先构造成经过校验的 `TaskSpec`：目标、最小上下文、精确工具白名单、读写根路径、Token 与工具调用预算、超时、角色、工作区模式和验收条件。`TaskController` 统一管理状态机、并发上限、超时和取消。子 agent 使用独立历史，拿不到 `agent` 工具，不能申请权限提升，只能返回有长度边界的 `TaskResult`；完成状态、实际修改文件、用量和越权次数由运行时生成，不接受子 agent 自报。最终复核与验收始终由主 agent 完成。
+**子 agent 现在统一运行在主 agent 持有的控制平面之后。** 模型可见接口不再提供 `single`/`coding_team` 开关：简单任务由主 agent 自己完成；存在独立子任务时，主 agent 根据实际情况发出零个、一个或多个 `agent` 调用。同一次响应中的调用会在硬上限内并行，有依赖的实现和审查必须等前置结果返回后再委派。每次委派都先构造成经过校验的 `TaskSpec`：目标、最小上下文、精确工具白名单、读写根路径、Token 与工具调用预算、超时、角色、工作区模式和验收条件。`TaskController` 统一管理状态机、并发上限、超时和取消。子 agent 使用独立历史，拿不到 `agent` 工具，不能申请权限提升，只能返回有长度边界的 `TaskResult`；完成状态、实际修改文件、用量和越权次数由运行时生成，不接受子 agent 自报。最终复核与验收始终由主 agent 完成。
+
+文件/搜索工具的相对路径和 Shell 命令都会以各 Agent 的 `workspace_root` 为基准。委派任务的读写根路径会在执行前完成规范化，并且规范化后仍必须位于父工作区内；越界范围会在子模型运行前直接拒绝。
 
 作为库使用时，可以直接提交协议对象：
 
@@ -253,9 +255,9 @@ Worker。Worker 持有租约期间，另一个 CLI 可以提交显式 durable �
 在 `--once` 模式下，两种 Worker 都会分别报告成功与失败任务数；只要存在终态任务失败或
 Worker 内部错误，进程就会返回非零状态。
 
-两种执行后端都走同一套协议。`fork` 在共享目录中执行，默认同一时刻只运行一个子任务；`worktree` 要求主 Git 工作区干净，在受管的 detached worktree 中运行子 agent，收集二进制差异，先由中央执行 `git apply --check`，再应用到主目录并纳入 `/undo`。发生冲突时主目录保持不变，隔离目录会留下供复核。`bash` 和 `undo_changes` 没有可可靠检查的文件路径参数，委派任务默认拒绝；只有库调用方明确选择无路径约束工具时才能开放，而 Worktree 任务始终拒绝它们。
+两种执行后端都走同一套协议。`fork` 在共享目录中执行。默认每次模型响应最多委派 4 个子 agent，控制器最多同时运行 3 个；可通过 `CORECODER_MAX_SUBAGENTS_PER_ROUND` 和 `CORECODER_TASK_CONCURRENCY` 调整为 1–32，并发数不得大于单轮委派上限。`worktree` 要求主 Git 工作区干净，在受管的 detached worktree 中运行子 agent，收集二进制差异，先由中央执行 `git apply --check`，再应用到主目录并纳入 `/undo`。发生冲突时主目录保持不变，隔离目录会留下供复核。`bash` 和 `undo_changes` 没有可可靠检查的文件路径参数，委派任务默认拒绝；只有库调用方明确选择无路径约束工具时才能开放，而 Worktree 任务始终拒绝它们。
 
-`Agent.run_team()` 和 `agent(mode="coding_team")` 在同一控制器上提供“研究者 → 实现者 → 审查者”分阶段模板，阶段之间只有主 agent 会转交有界摘要。只读任务可以选择最多三次共享总预算的重试；连续失败达到阈值后，控制器会先熔断，停止接纳更多子任务。
+模型不再选择固定团队模式，而是按任务实际需要显式委派最少数量的 researcher、executor 或 reviewer：简单请求可以不用子 agent，多个独立调查则可以动态展开。`Agent.run_team()` 仅作为库调用方主动选择固定流水线时使用的编程接口保留。只读任务可以选择最多三次共享总预算的重试；连续失败达到阈值后，控制器会先熔断，停止接纳更多子任务。
 
 每一个「为什么」，下面的文章系列都拆到了具体代码行。
 

@@ -10,6 +10,7 @@ Claude Code's BashTool is 1,143 lines. This is the distilled version:
 import asyncio
 import contextvars
 import os
+from pathlib import Path
 
 from ..sandbox import wrap_command
 from ..security.defaults import check_dangerous
@@ -50,18 +51,27 @@ class BashTool(Tool):
         "required": ["command"],
     }
 
-    async def execute(self, command: str, timeout: int = 120) -> str:
+    async def execute(
+        self,
+        command: str,
+        timeout: int = 120,
+        *,
+        cwd: str | os.PathLike[str] | None = None,
+    ) -> str:
         # safety check — delegated to security.defaults
         warning = check_dangerous(command)
         if warning:
             return f"⚠ Blocked: {warning}\nCommand: {command}\nIf intentional, modify the command to be more specific."
 
         # use this task's own tracked working directory
-        cwd = _cwd_context.get() or os.getcwd()
+        if cwd is None:
+            effective_cwd = _cwd_context.get() or os.getcwd()
+        else:
+            effective_cwd = str(Path(cwd).expanduser().resolve())
 
         # sandbox wrapping (no-op if CORECODER_SANDBOX is not set)
         try:
-            command = wrap_command(command, cwd=cwd)
+            command = wrap_command(command, cwd=effective_cwd)
         except RuntimeError as exc:
             return f"[Security] Blocked: {exc}"
 
@@ -70,7 +80,7 @@ class BashTool(Tool):
                 command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=cwd,
+                cwd=effective_cwd,
             )
             try:
                 stdout_bytes, stderr_bytes = await asyncio.wait_for(
@@ -86,7 +96,7 @@ class BashTool(Tool):
 
             # track cd commands so next command runs in the right place
             if proc.returncode == 0:
-                _update_cwd(command, cwd)
+                _update_cwd(command, effective_cwd)
             out = stdout
             if stderr:
                 out += f"\n[stderr]\n{stderr}"

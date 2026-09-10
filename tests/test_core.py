@@ -1,5 +1,8 @@
 """Tests for core modules: config, context, session, imports."""
 
+import sys
+from pathlib import Path
+
 import pytest
 
 from corecoder import ALL_TOOLS, LLM, Agent, Config, __version__
@@ -229,6 +232,67 @@ async def test_exec_tool_distinguishes_bad_args_from_internal_error():
     result_good, _, _ = await agent._exec_tool(_Good())
     assert "Error executing boom" in result_good
     assert "bad arguments" not in result_good
+
+
+@pytest.mark.asyncio
+async def test_agent_resolves_relative_file_tools_against_workspace(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    process_cwd = tmp_path / "process-cwd"
+    workspace.mkdir()
+    process_cwd.mkdir()
+    (workspace / "marker.txt").write_text("workspace copy", encoding="utf-8")
+    (process_cwd / "marker.txt").write_text("wrong process copy", encoding="utf-8")
+    monkeypatch.chdir(process_cwd)
+
+    agent = Agent(
+        llm=LLM.__new__(LLM),
+        tools=[get_tool("read_file"), get_tool("glob")],
+        replay=False,
+        workspace_root=workspace,
+    )
+
+    class _Read:
+        name, id, arguments = "read_file", "read", {"file_path": "marker.txt"}
+
+    class _Glob:
+        name, id, arguments = "glob", "glob", {"pattern": "*.txt"}
+
+    read_result, _, read_success = await agent._exec_tool(_Read())
+    glob_result, _, glob_success = await agent._exec_tool(_Glob())
+
+    assert read_success and "workspace copy" in read_result
+    assert "wrong process copy" not in read_result
+    assert glob_success and str(workspace / "marker.txt") in glob_result
+    assert str(process_cwd / "marker.txt") not in glob_result
+
+
+@pytest.mark.asyncio
+async def test_agent_runs_bash_from_workspace_root(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    process_cwd = tmp_path / "process-cwd"
+    workspace.mkdir()
+    process_cwd.mkdir()
+    monkeypatch.chdir(process_cwd)
+    agent = Agent(
+        llm=LLM.__new__(LLM),
+        tools=[get_tool("bash")],
+        replay=False,
+        workspace_root=workspace,
+    )
+
+    class _Bash:
+        name = "bash"
+        id = "bash"
+
+        def __init__(self):
+            self.arguments = {
+                "command": f'"{sys.executable}" -c "import os; print(os.getcwd())"',
+            }
+
+    result, _, success = await agent._exec_tool(_Bash())
+
+    assert success
+    assert Path(result.strip()).resolve() == workspace.resolve()
 
 
 def test_interrupt_backfills_missing_tool_replies():

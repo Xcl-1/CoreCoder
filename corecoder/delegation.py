@@ -369,10 +369,12 @@ class TaskBoundary:
         spec: TaskSpec,
         *,
         base_path: Path | None = None,
+        authority_root: Path | None = None,
         ownership_check: Callable[[], str | None] | None = None,
     ):
         self.spec = spec
         self.base_path = (base_path or Path.cwd()).resolve()
+        self.authority_root = authority_root.resolve() if authority_root is not None else None
         self.ownership_check = ownership_check
         self.allowed_tools = frozenset(spec.allowed_tools)
         self.read_roots = self._resolve_roots(spec.read_paths)
@@ -383,6 +385,13 @@ class TaskBoundary:
         for value in values:
             candidate = Path(value).expanduser()
             resolved = (candidate if candidate.is_absolute() else self.base_path / candidate).resolve()
+            if self.authority_root is not None and not self._inside(
+                resolved, (self.authority_root,)
+            ):
+                raise ValueError(
+                    f"task path '{resolved}' is outside parent workspace "
+                    f"'{self.authority_root}'"
+                )
             if resolved not in roots:
                 roots.append(resolved)
         return tuple(roots)

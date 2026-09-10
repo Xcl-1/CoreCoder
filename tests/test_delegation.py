@@ -10,7 +10,6 @@ from pydantic import ValidationError
 from corecoder.agent import Agent
 from corecoder.delegation import (
     AcceptanceCheck,
-    AgentTeamResult,
     AgentTeamTemplate,
     TaskBoundary,
     TaskController,
@@ -139,6 +138,33 @@ async def test_controller_enforces_concurrency_limit():
 
     assert peak == 1
     assert [item.status for item in results] == [TaskStatus.COMPLETED] * 3
+
+
+@pytest.mark.parametrize(
+    "options,pattern",
+    [
+        ({"task_concurrency": 0}, "task_concurrency"),
+        ({"task_concurrency": 33}, "task_concurrency"),
+        ({"max_subagents_per_round": 0}, "max_subagents_per_round"),
+        ({"max_subagents_per_round": 33}, "max_subagents_per_round"),
+    ],
+)
+def test_agent_validates_dynamic_delegation_limits(options, pattern):
+    with pytest.raises(ValueError, match=pattern):
+        Agent(llm=_ReportLLM(), tools=[], replay=False, **options)
+
+
+def test_delegated_prompt_makes_path_boundaries_explicit():
+    prompt = Agent._task_prompt(TaskSpec(
+        objective="inspect one file",
+        role=TaskRole.RESEARCHER,
+        allowed_tools=("read_file",),
+        read_paths=("source.py",),
+    ))
+
+    assert "hard boundaries" in prompt
+    assert "instead of attempting access" in prompt
+    assert "rather than globbing its parent" in prompt
 
 
 @pytest.mark.asyncio
@@ -568,6 +594,7 @@ async def test_child_tool_progress_records_name_without_arguments(tmp_path):
         replay=False,
         agent_id="main",
         task_state_dir=state_dir,
+        workspace_root=tmp_path,
     )
     spec = TaskSpec(
         objective="read one file",
@@ -676,7 +703,13 @@ async def test_tool_call_budget_is_enforced_before_execution(tmp_path):
             return LLMResponse(content='{"summary":"stopped","risks":[]}')
 
     llm = _ToolCallingLLM()
-    agent = Agent(llm=llm, tools=[get_tool("read_file")], replay=False, agent_id="main")
+    agent = Agent(
+        llm=llm,
+        tools=[get_tool("read_file")],
+        replay=False,
+        agent_id="main",
+        workspace_root=tmp_path,
+    )
     spec = TaskSpec(
         objective="read evidence",
         role=TaskRole.RESEARCHER,
@@ -715,7 +748,34 @@ async def test_agent_tool_returns_the_structured_protocol():
 
 
 @pytest.mark.asyncio
-async def test_agent_tool_can_run_predefined_team_through_same_controller():
+async def test_delegated_scope_cannot_escape_parent_workspace(tmp_path):
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+    llm = _ReportLLM()
+    agent = Agent(
+        llm=llm,
+        tools=[get_tool("read_file")],
+        replay=False,
+        agent_id="main",
+        workspace_root=workspace,
+    )
+
+    result = await agent.delegate(TaskSpec(
+        objective="inspect outside parent authority",
+        role=TaskRole.RESEARCHER,
+        allowed_tools=("read_file",),
+        read_paths=(str(outside),),
+    ))
+
+    assert result.status == TaskStatus.REJECTED
+    assert "outside parent workspace" in result.error
+    assert llm.calls == []
+
+
+@pytest.mark.asyncio
+async def test_main_agent_can_choose_multiple_dynamic_children():
     llm = _ReportLLM()
     agent = Agent(
         llm=llm,
@@ -723,18 +783,126 @@ async def test_agent_tool_can_run_predefined_team_through_same_controller():
         replay=False,
         context_artifacts_enabled=False,
         agent_id="main",
+        task_concurrency=3,
     )
+    calls = [
+        ToolCall(
+            id=f"dynamic-{index}",
+            name="agent",
+            arguments={
+                "task": f"inspect component {index}",
+                "role": "researcher",
+                "allowed_tools": [],
+            },
+        )
+        for index in range(3)
+    ]
 
-    payload = await agent._tool_by_name["agent"].execute(
-        task="implement safely",
-        mode="coding_team",
-    )
-    team = AgentTeamResult.model_validate_json(payload)
+    assert "# Dynamic sub-agent delegation" in agent._system
+    assert "at most 4 sub-agents" in agent._system
 
-    assert team.completed
-    assert list(team.results) == ["researcher", "executor", "reviewer"]
-    assert all(result.parent_id == "main" for result in team.results.values())
+    executions = await agent._exec_tools_async(calls)
+    results = [TaskResult.model_validate_json(execution[0]) for _, execution in executions]
+
+    assert len(results) == 3
+    assert all(result.status == TaskStatus.COMPLETED for result in results)
+    assert all(result.parent_id == "main" for result in results)
     assert len(llm.calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_dynamic_delegation_rejects_children_above_per_round_limit():
+    llm = _ReportLLM()
+    agent = Agent(
+        llm=llm,
+        tools=ALL_TOOLS,
+        replay=False,
+        context_artifacts_enabled=False,
+        max_subagents_per_round=2,
+        task_concurrency=2,
+    )
+    calls = [
+        ToolCall(
+            id=f"bounded-{index}",
+            name="agent",
+            arguments={"task": f"bounded task {index}", "allowed_tools": []},
+        )
+        for index in range(3)
+    ]
+
+    executions = await agent._exec_tools_async(calls)
+    outputs = [execution[0] for _, execution in executions]
+
+    assert len(outputs) == 3
+    assert sum("delegation limit exceeded" in output for output in outputs) == 1
+    assert len(llm.calls) == 2
+    assert agent._policy_violations == 1
+
+
+@pytest.mark.asyncio
+async def test_main_chat_dynamically_selects_two_children_and_combines_results():
+    class _DynamicDecisionLLM:
+        def __init__(self):
+            self.calls = []
+
+        def chat(self, messages, tools=None, on_token=None):
+            self.calls.append(messages)
+            system = str(messages[0].get("content", ""))
+            if "[Delegated Role:" in system:
+                return LLMResponse(content=json.dumps({
+                    "summary": "independent inspection complete",
+                    "evidence": [],
+                    "tests": [],
+                    "acceptance": [],
+                    "risks": [],
+                }))
+            if any(message.get("role") == "tool" for message in messages):
+                return LLMResponse(content="combined two child results")
+            return LLMResponse(tool_calls=[
+                ToolCall(
+                    id="child-a",
+                    name="agent",
+                    arguments={
+                        "task": "inspect component A",
+                        "role": "researcher",
+                        "allowed_tools": [],
+                    },
+                ),
+                ToolCall(
+                    id="child-b",
+                    name="agent",
+                    arguments={
+                        "task": "inspect component B",
+                        "role": "researcher",
+                        "allowed_tools": [],
+                    },
+                ),
+            ])
+
+    llm = _DynamicDecisionLLM()
+    agent = Agent(
+        llm=llm,
+        tools=ALL_TOOLS,
+        replay=False,
+        context_artifacts_enabled=False,
+        task_concurrency=2,
+    )
+    try:
+        answer = await agent.chat("Inspect two independent components")
+
+        assert answer == "combined two child results"
+        assert len(agent.tasks.list_tasks(limit=10)) == 2
+        assert all(
+            task.status == TaskStatus.COMPLETED
+            for task in agent.tasks.list_tasks(limit=10)
+        )
+        assert agent.transcript == [
+            {"role": "user", "content": "Inspect two independent components"},
+            {"role": "assistant", "content": "combined two child results"},
+        ]
+        assert len(llm.calls) == 4
+    finally:
+        agent.close()
 
 
 def test_worktree_merge_is_checked_and_undoable(tmp_path):
@@ -948,6 +1116,7 @@ async def test_prompt_injection_cannot_trigger_child_write_or_parent_prompt(tmp_
         replay=False,
         guard=guard,
         agent_id="main",
+        workspace_root=tmp_path,
     )
     result = await agent.delegate(TaskSpec(
         objective="inspect untrusted input",

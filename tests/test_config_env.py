@@ -41,6 +41,8 @@ ENV_KEYS = [
     "CORECODER_TASK_PERSISTENCE",
     "CORECODER_TASK_STATE_DIR",
     "CORECODER_TASK_LEASE_STALE_SECONDS",
+    "CORECODER_TASK_CONCURRENCY",
+    "CORECODER_MAX_SUBAGENTS_PER_ROUND",
     "CORECODER_TENANT_ID",
     "CORECODER_USER_ID",
     "CORECODER_NETWORK_MODE",
@@ -156,6 +158,24 @@ def test_task_state_directory_configuration(monkeypatch, tmp_path):
 def test_task_lease_stale_configuration(monkeypatch):
     monkeypatch.setenv("CORECODER_TASK_LEASE_STALE_SECONDS", "45.5")
     assert Config.from_env().task_lease_stale_seconds == 45.5
+
+
+def test_dynamic_subagent_limits_configuration(monkeypatch):
+    monkeypatch.setenv("CORECODER_TASK_CONCURRENCY", "5")
+    monkeypatch.setenv("CORECODER_MAX_SUBAGENTS_PER_ROUND", "6")
+
+    config = Config.from_env()
+
+    assert config.task_concurrency == 5
+    assert config.max_subagents_per_round == 6
+
+
+def test_subagent_concurrency_cannot_exceed_per_round_limit(monkeypatch):
+    monkeypatch.setenv("CORECODER_TASK_CONCURRENCY", "5")
+    monkeypatch.setenv("CORECODER_MAX_SUBAGENTS_PER_ROUND", "4")
+
+    with pytest.raises(ValueError, match="cannot exceed"):
+        Config.from_env()
 
 
 def test_context_artifact_configuration(monkeypatch, tmp_path):
@@ -346,6 +366,10 @@ def test_memory_dir_default_expands_home(monkeypatch):
         ("CORECODER_TASK_PERSISTENCE", "maybe"),
         ("CORECODER_TASK_LEASE_STALE_SECONDS", "soon"),
         ("CORECODER_TASK_LEASE_STALE_SECONDS", "2"),
+        ("CORECODER_TASK_CONCURRENCY", "invalid"),
+        ("CORECODER_TASK_CONCURRENCY", "0"),
+        ("CORECODER_MAX_SUBAGENTS_PER_ROUND", "invalid"),
+        ("CORECODER_MAX_SUBAGENTS_PER_ROUND", "33"),
         ("CORECODER_NETWORK_MODE", "open"),
         ("CORECODER_NETWORK_ALLOWLIST", "https://example.com"),
     ],

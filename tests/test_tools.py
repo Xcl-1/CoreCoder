@@ -354,9 +354,19 @@ def test_agent_tool_schema():
     agent_t = get_tool("agent")
     s = agent_t.schema()
     assert s["function"]["name"] == "agent"
-    assert "task" in s["function"]["parameters"]["properties"]
-    assert "background" in s["function"]["parameters"]["properties"]
-    assert "durable" in s["function"]["parameters"]["properties"]
+    properties = s["function"]["parameters"]["properties"]
+    assert "task" in properties
+    assert "background" in properties
+    assert "durable" in properties
+    assert properties["role"]["enum"] == ["executor", "researcher", "reviewer"]
+    assert "mode" not in properties
+    assert "review" not in properties
+    allowed = properties["allowed_tools"]["items"]["enum"]
+    assert "bash" not in allowed
+    assert "agent" not in allowed
+    assert "task_control" not in allowed
+    assert "read_file" in allowed
+    assert "multiple independent sub-tasks" in s["function"]["description"]
 
 
 def test_task_control_tool_schema():

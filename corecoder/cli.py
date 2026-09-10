@@ -243,6 +243,8 @@ def main():
         context_artifact_max_mb=config.context_artifact_max_mb,
         task_state_dir=(config.task_state_data_dir if config.task_persistence_enabled else None),
         task_lease_stale_seconds=config.task_lease_stale_seconds,
+        task_concurrency=config.task_concurrency,
+        max_subagents_per_round=config.max_subagents_per_round,
         workspace_root=workspace_roots[0],
     )
 
@@ -267,6 +269,8 @@ def main():
                     config.task_state_data_dir if config.task_persistence_enabled else None
                 ),
                 task_lease_stale_seconds=config.task_lease_stale_seconds,
+                task_concurrency=config.task_concurrency,
+                max_subagents_per_round=config.max_subagents_per_round,
                 workspace_root=workspace_root,
             ))
         worker_status = _run_workers(

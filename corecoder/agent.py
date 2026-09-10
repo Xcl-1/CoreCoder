@@ -70,6 +70,7 @@ from .task_queue import DurableTaskQueue
 from .tools import create_tools
 from .tools.agent import AgentTool
 from .tools.base import Tool
+from .tools.bash import BashTool
 from .tools.changes import ChangeTracker, bind_change_tracker, reset_change_tracker
 from .tools.retrieve_context import RetrieveContextTool
 from .tools.task_control import TaskControlTool
@@ -92,6 +93,14 @@ _FINALIZATION_SYSTEM_PROMPT = (
 )
 
 _READ_TOOLS = {"read_file", "grep", "glob"}
+_WORKSPACE_PATH_ARGUMENTS = {
+    "read_file": "file_path",
+    "write_file": "file_path",
+    "edit_file": "file_path",
+    "edit_ast": "file_path",
+    "grep": "path",
+    "glob": "path",
+}
 _SCOPE_PATTERNS = (
     re.compile(r"(?:检索|搜索|读取|检查)?范围(?:限制|限定)(?:在|为|至)?\s*([^，。；;\n]+)"),
     re.compile(
@@ -190,7 +199,8 @@ class Agent:
         task_boundary: TaskBoundary | None = None,
         token_budget: int | None = None,
         max_tool_calls: int | None = None,
-        task_concurrency: int = 1,
+        task_concurrency: int = 3,
+        max_subagents_per_round: int = 4,
         task_failure_threshold: int = 3,
         task_circuit_cooldown_seconds: float = 60.0,
         task_history_limit: int = 1_000,
@@ -202,6 +212,11 @@ class Agent:
         workspace_root: str | Path | None = None,
     ):
         self.llm = llm
+        if not 1 <= task_concurrency <= 32:
+            raise ValueError("task_concurrency must be between 1 and 32")
+        if not 1 <= max_subagents_per_round <= 32:
+            raise ValueError("max_subagents_per_round must be between 1 and 32")
+        self.max_subagents_per_round = max_subagents_per_round
         self.session_id = session_id or self._new_session_id()
         self.agent_id = agent_id or f"agent_{uuid.uuid4().hex[:12]}"
         self.parent_id = parent_id
@@ -249,6 +264,22 @@ class Agent:
             self.tools,
             working_directory=str(self.workspace_root),
         )
+        if any(isinstance(tool, AgentTool) for tool in self.tools):
+            self._system += (
+                "\n\n# Dynamic sub-agent delegation\n"
+                "Decide whether delegation materially helps before calling the agent tool. "
+                "Handle simple or tightly coupled work yourself. For substantial independent "
+                "sub-tasks, issue one agent call per sub-task in the same response; the runtime "
+                f"accepts at most {self.max_subagents_per_round} sub-agents from one response "
+                f"and runs at most {task_concurrency} concurrently. "
+                "Give every child the minimum context, role, tools, paths, budget, and concrete "
+                "acceptance criteria it needs. Never put bash, agent, task_control, or "
+                "undo_changes in a child's allowed_tools. Never give two concurrent children "
+                "overlapping "
+                "write ownership. Schedule dependent implementation or review only after the "
+                "prerequisite results return. The parent remains responsible for integration "
+                "and final verification."
+            )
         self._step_number = 0
         self.guard = guard
         if self.guard is not None and hasattr(self.guard, "agent_id"):
@@ -803,6 +834,7 @@ class Agent:
             self._policy_violations += 1
             return "[Security] Blocked: delegated task tool-call budget exhausted", 0, False
         self._tool_calls_used += 1
+        arguments = self._resolve_workspace_arguments(tc.name, arguments)
         if self._task_boundary is not None:
             arguments = self._task_boundary.resolve_arguments(tc.name, arguments)
             boundary_error = self._task_boundary.check(tc.name, arguments)
@@ -890,7 +922,10 @@ class Agent:
                     chunks.append(f"[Scope: {target}]\n{scoped_result}")
                 result = "[Scope] Parent search constrained to user-approved roots.\n" + "\n".join(chunks)
             else:
-                result = await tool.execute(**arguments)
+                execution_arguments = arguments
+                if isinstance(tool, BashTool):
+                    execution_arguments = {**arguments, "cwd": self.workspace_root}
+                result = await tool.execute(**execution_arguments)
             if result.startswith("[Security]"):
                 self._policy_violations += 1
             # Determine status before provenance labelling changes the first
@@ -938,12 +973,20 @@ class Agent:
             if on_tool:
                 on_tool(tc.name, tc.arguments)
 
+        delegation_calls = [tc for tc in tool_calls if tc.name == "agent"]
+        excess_delegations = delegation_calls[self.max_subagents_per_round:]
+        excess_ids = {tc.id for tc in excess_delegations}
+        if excess_delegations:
+            self._policy_violations += len(excess_delegations)
+
         # classify
         readers: list = []   # (tc,) — safe to run fully parallel
         writers: list = []   # (tc,) — grouped by target path below
         others: list = []    # (tc,) — bash, agent, etc.
 
         for tc in tool_calls:
+            if tc.id in excess_ids:
+                continue
             name = tc.name
             if name in ("read_file", "grep", "glob", "retrieve_context"):
                 readers.append(tc)
@@ -989,6 +1032,13 @@ class Agent:
                 # _exec_tool never raises (it catches internally),
                 # but guard anyway
                 results.append((tc, ("Error: internal error", 0, False)))
+
+        for tc in excess_delegations:
+            message = (
+                "Error: sub-agent delegation limit exceeded; "
+                f"at most {self.max_subagents_per_round} agent calls are allowed per response"
+            )
+            results.append((tc, (message, 0, False)))
 
         return results
 
@@ -1079,9 +1129,8 @@ class Agent:
                 names.update(words & known_tools)
         return names
 
-    @staticmethod
-    def _read_scope_in_request(user_input: str) -> tuple[Path, ...]:
-        cwd = Path.cwd().resolve()
+    def _read_scope_in_request(self, user_input: str) -> tuple[Path, ...]:
+        cwd = self.workspace_root
         roots: list[Path] = []
         for pattern in _SCOPE_PATTERNS:
             match = pattern.search(user_input)
@@ -1125,7 +1174,9 @@ class Agent:
         if tool_name not in {"grep", "glob"} or not self._turn_read_scope:
             return ()
         raw_path = Path(str(arguments.get("path") or ".")).expanduser()
-        requested = (raw_path if raw_path.is_absolute() else Path.cwd() / raw_path).resolve()
+        requested = (
+            raw_path if raw_path.is_absolute() else self.workspace_root / raw_path
+        ).resolve()
         if not any(root.is_relative_to(requested) for root in self._turn_read_scope):
             return ()
         include = str(arguments.get("include") or "")
@@ -1140,12 +1191,15 @@ class Agent:
             targets.append(root)
         return tuple(targets)
 
-    @staticmethod
-    def _read_scope_targets(tool_name: str, arguments: dict[str, Any]) -> tuple[Path, ...]:
+    def _read_scope_targets(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> tuple[Path, ...]:
         raw_path = arguments.get("file_path") if tool_name == "read_file" else arguments.get("path", ".")
         base = Path(str(raw_path or ".")).expanduser()
         if not base.is_absolute():
-            base = Path.cwd() / base
+            base = self.workspace_root / base
         targets = [base]
         if tool_name != "glob":
             return (base.resolve(),)
@@ -1157,6 +1211,25 @@ class Agent:
                 alternatives = [value.strip() for value in part[1:-1].split(",") if value.strip()]
             targets = [target / value for target in targets for value in alternatives]
         return tuple(target.resolve() for target in targets)
+
+    def _resolve_workspace_arguments(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Resolve built-in file-tool paths against this agent's workspace."""
+        key = _WORKSPACE_PATH_ARGUMENTS.get(tool_name)
+        if key is None:
+            return arguments
+        resolved = dict(arguments)
+        if key not in resolved:
+            if tool_name in {"grep", "glob"}:
+                resolved[key] = str(self.workspace_root)
+            return resolved
+        candidate = Path(str(resolved[key])).expanduser()
+        if not candidate.is_absolute():
+            resolved[key] = str((self.workspace_root / candidate).resolve())
+        return resolved
 
     @staticmethod
     def _new_session_id() -> str:
@@ -1672,11 +1745,15 @@ class Agent:
             for tool in self.tools
             if tool.name in requested and tool.name not in {"agent", "task_control"}
         ]
-        boundary = TaskBoundary(
-            spec,
-            base_path=workspace_root,
-            ownership_check=self._task_admission_error,
-        )
+        try:
+            boundary = TaskBoundary(
+                spec,
+                base_path=workspace_root,
+                authority_root=workspace_root,
+                ownership_check=self._task_admission_error,
+            )
+        except ValueError as exc:
+            return self._rejected_task_result(spec, agent_id, started, str(exc))
         child_changes = ChangeTracker()
         child_guard = self.guard
         if self.guard is not None and hasattr(self.guard, "for_delegate"):
@@ -1852,6 +1929,11 @@ class Agent:
             f"- write paths: {write_paths}\n- token budget: {spec.token_budget}\n"
             f"- tool-call budget: {spec.max_tool_calls}\n\n"
             f"Acceptance criteria:\n{criteria}\n\n"
+            "The read and write paths above are hard boundaries, not discovery hints. "
+            "Do not probe their parents, siblings, repository metadata, configuration, "
+            "or dependency files outside those roots. If required evidence is outside "
+            "the boundary, record that limitation in risks instead of attempting access. "
+            "When a root is a file, read that file directly rather than globbing its parent.\n\n"
             "Return ONLY one JSON object with these keys: summary (string), "
             "evidence (string array), tests (array of {name,status,details}), "
             "acceptance (array of {criterion,passed,evidence}), and risks "

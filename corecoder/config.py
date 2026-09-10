@@ -129,6 +129,8 @@ class Config:
     task_persistence_enabled: bool = True
     task_state_dir: Path = Path.home() / ".corecoder" / "tasks"
     task_lease_stale_seconds: float = 30.0
+    task_concurrency: int = 3
+    max_subagents_per_round: int = 4
     tenant_id: str = ""
     user_id: str = ""
     network_mode: str = "confirm"
@@ -194,6 +196,8 @@ class Config:
         context_artifacts_raw = os.getenv("CORECODER_CONTEXT_ARTIFACTS", "1").strip().lower()
         task_persistence_raw = os.getenv("CORECODER_TASK_PERSISTENCE", "1").strip().lower()
         task_lease_stale_raw = os.getenv("CORECODER_TASK_LEASE_STALE_SECONDS", "30")
+        task_concurrency_raw = os.getenv("CORECODER_TASK_CONCURRENCY", "3")
+        max_subagents_raw = os.getenv("CORECODER_MAX_SUBAGENTS_PER_ROUND", "4")
         context_artifact_threshold_raw = os.getenv(
             "CORECODER_CONTEXT_ARTIFACT_THRESHOLD", "12000"
         )
@@ -293,6 +297,25 @@ class Config:
                 f"got: {task_lease_stale_seconds}"
             )
         try:
+            task_concurrency = int(task_concurrency_raw)
+            max_subagents_per_round = int(max_subagents_raw)
+        except ValueError as exc:
+            raise ValueError("Sub-agent concurrency limits must be integers") from exc
+        if not 1 <= task_concurrency <= 32:
+            raise ValueError(
+                f"CORECODER_TASK_CONCURRENCY must be 1-32, got: {task_concurrency}"
+            )
+        if not 1 <= max_subagents_per_round <= 32:
+            raise ValueError(
+                "CORECODER_MAX_SUBAGENTS_PER_ROUND must be 1-32, "
+                f"got: {max_subagents_per_round}"
+            )
+        if task_concurrency > max_subagents_per_round:
+            raise ValueError(
+                "CORECODER_TASK_CONCURRENCY cannot exceed "
+                "CORECODER_MAX_SUBAGENTS_PER_ROUND"
+            )
+        try:
             context_artifact_threshold = int(context_artifact_threshold_raw)
         except ValueError as exc:
             raise ValueError(
@@ -386,6 +409,8 @@ class Config:
             task_persistence_enabled=task_persistence_raw in ("1", "true", "yes"),
             task_state_dir=resolve_task_state_dir(),
             task_lease_stale_seconds=task_lease_stale_seconds,
+            task_concurrency=task_concurrency,
+            max_subagents_per_round=max_subagents_per_round,
             tenant_id=tenant_id,
             user_id=user_id,
             network_mode=validated_network.mode,
